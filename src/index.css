@@ -12,26 +12,142 @@ body {
   height: 100dvh;
 }
 
-.nav {
-  flex: 0 0 auto;
+/* Header */
+.header {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
-  gap: 12px;
-  padding: 12px 16px;
-  border-bottom: 1px solid #ccc;
+  padding: 16px;
+  border-bottom: 1px solid #eee;
+  min-height: 56px;
   box-sizing: border-box;
+  gap: 12px;
 }
 
-/* Fills the remaining height below the nav; min-height:0 lets it shrink so the
-   canvas can size to it instead of overflowing. */
-.graph {
-  flex: 1 1 auto;
+.header-title {
+  font-size: 22px;
+  font-weight: 700;
+  margin: 0;
+  flex: 1;
+}
+
+.header-live {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+  color: #888;
+}
+
+.live-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #2e9e4f;
+  display: inline-block;
+}
+
+.header-progress-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border: 1px solid #ccc;
+  border-radius: 20px;
+  background: none;
+  font-size: 14px;
+  cursor: pointer;
+  color: #333;
+}
+
+.header-progress-btn:active {
+  background: #f2f2f2;
+}
+
+.header-close-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px;
+  border: none;
+  border-radius: 50%;
+  background: none;
+  cursor: pointer;
+  color: #888;
+}
+
+.header-close-btn:active {
+  background: #f2f2f2;
+}
+
+.header-back-btn {
+  padding: 4px;
+  border: none;
+  background: none;
+  cursor: pointer;
+  color: #333;
+  display: flex;
+  align-items: center;
+}
+
+.header-range {
+  font-size: 14px;
+  color: #888;
+}
+
+/* Content area */
+.content {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Practice view */
+.practice-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.stats-card {
+  display: flex;
+  align-items: center;
+  margin: 16px 16px 0;
+  padding: 16px 24px;
+  border: 1px solid #ddd;
+  border-radius: 12px;
+}
+
+.stats-col {
+  flex: 1;
+  text-align: center;
+}
+
+.stats-value {
+  font-size: 32px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: #111;
+}
+
+.stats-label {
+  font-size: 12px;
+  color: #888;
+  margin-top: 4px;
+}
+
+.stats-divider {
+  width: 1px;
+  height: 40px;
+  background: #ddd;
+}
+
+.pitch-graph-container {
+  flex: 1;
   min-height: 0;
   position: relative;
 }
 
-.graph canvas {
+.pitch-graph-container canvas {
   display: block;
   width: 100%;
   height: 100%;
@@ -54,130 +170,46 @@ body {
   height: 120px;
 }
 
-/* Controls group grows to fill the row; the select shrinks within it. */
-.nav-controls {
+.transport {
   display: flex;
-  gap: 12px;
-  flex: 1 1 260px;
-  min-width: 0;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 16px;
+  border-top: 1px solid #eee;
+  box-sizing: border-box;
 }
 
-.nav-controls select {
-  flex: 1 1 auto;
-  min-width: 0;
-  font-size: 16px;
-  padding: 8px;
-}
-
-.nav-controls button {
-  flex: 0 0 auto;
-  font-size: 16px;
-  padding: 8px 16px;
-}
-
-/* Takes list: scrolls within the area below the nav. */
-.list {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow-y: auto;
-}
-
-.list-empty {
-  padding: 24px 16px;
-  color: #888;
-}
-
-.list-row {
+.transport-waveform {
+  height: 44px;
+  position: relative;
   display: flex;
   align-items: center;
-  width: 100%;
-  box-sizing: border-box;
-  border-bottom: 1px solid #eee;
-}
-
-.list-row-play {
-  flex: 1 1 auto;
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  padding: 16px;
-  border: none;
-  background: none;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-  min-width: 0;
-}
-
-.list-row-play:active {
-  background: #f2f2f2;
-}
-
-.list-row-delete {
-  flex: 0 0 auto;
-  padding: 8px 16px;
-  margin-right: 16px;
-  border: 1px solid #ccc;
-  background: none;
-  font: inherit;
-  font-size: 14px;
-  cursor: pointer;
-  color: #666;
-}
-
-.list-row-delete:active {
-  background: #f2f2f2;
-}
-
-.list-time {
-  font-size: 16px;
-}
-
-.list-dur {
-  font-size: 14px;
-  color: #888;
-  font-variant-numeric: tabular-nums;
-}
-
-/* Readouts stay together as one unit, pushed to the right on wide screens. */
-.nav-readouts {
-  display: flex;
-  align-items: baseline;
-  gap: 16px;
-  margin-left: auto;
-  font-variant-numeric: tabular-nums;
-}
-
-.nav-pitch {
-  display: flex;
-  align-items: baseline;
   gap: 8px;
 }
 
-/* On narrow screens, readouts wrap to their own full-width row instead of
-   spilling unevenly: pitch on the left, volume on the right. */
-@media (max-width: 600px) {
-  .nav-readouts {
-    margin-left: 0;
-    width: 100%;
-    justify-content: space-between;
-  }
-}
-
-.transport {
+.transport-close-btn {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 12px 16px;
-  border-top: 1px solid #ccc;
-  box-sizing: border-box;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: none;
+  cursor: pointer;
+  color: #888;
+}
+
+.transport-close-btn:active {
+  background: #f2f2f2;
 }
 
 .transport-waveform-btn {
-  flex: 1 1 auto;
-  height: 48px;
+  flex: 1;
   min-width: 0;
+  height: 100%;
   padding: 0;
   border: none;
   background: none;
@@ -190,13 +222,427 @@ body {
   height: 100%;
 }
 
-.transport-controls {
-  flex: 0 0 auto;
-  display: flex;
-  gap: 8px;
+.transport-live-waveform {
+  display: block;
+  width: 100%;
+  height: 100%;
 }
 
-.transport button {
+/* Idle / recording: flat dashed baseline where the waveform will be. */
+.wf-flat {
+  height: 0;
+  margin-top: 21px;
+  border-top: 2px dashed #d4d4d4;
+}
+
+.transport-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.transport-time {
+  flex: 1 1 0;
+  font-size: 13px;
+  color: #888;
+  font-variant-numeric: tabular-nums;
+}
+
+.transport-time.right {
+  text-align: right;
+}
+
+.transport-center {
+  flex: 0 0 auto;
+}
+
+.transport-btn {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  border: 1px solid #ddd;
+  background: #fff;
+  color: #111;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  cursor: pointer;
+}
+
+.transport-btn:active {
+  background: #f2f2f2;
+}
+
+.transport-btn:disabled {
+  color: #ccc;
+  border-color: #eee;
+  cursor: default;
+}
+
+.transport-btn svg {
+  width: 28px;
+  height: 28px;
+}
+
+.rec-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.rec-blink {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #e0392b;
+  animation: blink 1s steps(1, end) infinite;
+}
+
+@keyframes blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+/* Tab bar */
+.tab-bar {
+  display: flex;
+  border-top: 1px solid #eee;
+  min-height: 56px;
+  background: #fff;
+}
+
+.tab {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  border: none;
+  background: none;
+  font-size: 11px;
+  color: #888;
+  cursor: pointer;
+  padding: 8px;
+}
+
+.tab-active {
+  color: #111;
+  font-weight: 600;
+}
+
+.tab-icon {
+  width: 20px;
+  height: 20px;
+}
+
+/* Recordings view */
+.recordings-view {
+  height: 100%;
+  overflow-y: auto;
+}
+
+.recordings-group {
+  padding: 0 16px;
+}
+
+.recordings-date-header {
+  font-size: 13px;
+  font-weight: 600;
+  color: #888;
+  padding: 16px 0 8px;
+}
+
+.recording-row {
+  display: flex;
+  align-items: center;
+  border-bottom: 1px solid #eee;
+}
+
+.recording-row-play {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  padding: 12px 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+  text-align: left;
+}
+
+.recording-row-play:active {
+  background: #f2f2f2;
+}
+
+.recording-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.recording-time {
+  font-size: 18px;
+  font-weight: 500;
+  color: #111;
+}
+
+.recording-duration {
+  font-size: 13px;
+  color: #888;
+  font-variant-numeric: tabular-nums;
+}
+
+.waveform-thumbnail {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  width: 60px;
+  height: 30px;
+  padding: 0 8px;
+}
+
+.waveform-bar {
+  flex: 1;
+  background: #ccc;
+  border-radius: 1px;
+  min-height: 2px;
+}
+
+.recording-row-delete {
+  padding: 8px 12px;
+  border: none;
+  background: none;
+  font-size: 18px;
+  color: #ddd;
+  cursor: pointer;
+}
+
+.recording-row-delete:active {
+  color: #f44;
+}
+
+/* Progress view */
+.progress-view {
+  padding: 16px;
+  overflow-y: auto;
+  height: 100%;
+  box-sizing: border-box;
+}
+
+.progress-stats {
+  display: flex;
+  gap: 32px;
+  margin-bottom: 32px;
+}
+
+.progress-stat-value {
+  font-size: 36px;
+  font-weight: 700;
+  color: #111;
+}
+
+.progress-stat-unit {
   font-size: 16px;
-  padding: 8px 16px;
+  font-weight: 400;
+  color: #888;
+}
+
+.progress-stat-label {
+  font-size: 13px;
+  color: #888;
+}
+
+.bar-chart-container {
+  border: 1px solid #ddd;
+  border-radius: 12px;
+  padding: 16px;
+}
+
+.bar-chart {
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  height: 120px;
+}
+
+.bar-chart-bar-container {
+  flex: 1;
+  height: 100%;
+  display: flex;
+  align-items: flex-end;
+}
+
+.bar-chart-bar {
+  width: 100%;
+  background: #555;
+  border-radius: 2px 2px 0 0;
+  min-height: 4px;
+}
+
+.bar-chart-labels {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 8px;
+  font-size: 12px;
+  color: #888;
+}
+
+.list-empty {
+  padding: 24px 16px;
+  color: #888;
+  text-align: center;
+}
+
+/* Main pane wrapper */
+.main-pane {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-width: 0;
+}
+
+/* Sidebar — hidden on mobile */
+.sidebar {
+  display: none;
+}
+
+.sidebar-header {
+  display: flex;
+  align-items: center;
+  padding: 16px;
+  border-bottom: 1px solid #eee;
+  min-height: 56px;
+  box-sizing: border-box;
+}
+
+.sidebar-brand {
+  font-size: 22px;
+  font-weight: 700;
+}
+
+.sidebar-nav {
+  display: flex;
+  gap: 8px;
+  padding: 12px 16px;
+  border-bottom: 1px solid #eee;
+}
+
+.sidebar-nav-btn {
+  flex: 1;
+  padding: 8px 12px;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  background: none;
+  font-size: 14px;
+  cursor: pointer;
+  color: #888;
+}
+
+.sidebar-nav-btn:active {
+  background: #f2f2f2;
+}
+
+.sidebar-nav-btn-active {
+  color: #111;
+  font-weight: 600;
+  border-color: #111;
+}
+
+.sidebar-recordings {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.sidebar-recordings-header {
+  font-size: 13px;
+  font-weight: 600;
+  color: #888;
+  padding: 12px 16px 8px;
+}
+
+.sidebar-recordings-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.recording-row-selected {
+  background: #f5f5f5;
+}
+
+/* Desktop-only progress stat */
+.progress-stat-desktop {
+  display: none;
+}
+
+/* Desktop layout */
+@media (min-width: 768px) {
+  .app {
+    flex-direction: row;
+  }
+
+  /* Fill the viewport width beside the fixed-width sidebar (otherwise the pane
+     shrink-wraps to its content and leaves empty space on the right). */
+  .main-pane {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .sidebar {
+    display: flex;
+    flex-direction: column;
+    width: 280px;
+    flex-shrink: 0;
+    border-right: 1px solid #eee;
+    height: 100%;
+  }
+
+  .tab-bar {
+    display: none;
+  }
+
+  .recordings-view {
+    display: none;
+  }
+
+  .progress-stat-desktop {
+    display: block;
+  }
+
+  /* Progress fills the desktop pane: roomier stats + a chart that grows to
+     use the available height instead of a fixed mobile-height strip. */
+  .progress-view {
+    display: flex;
+    flex-direction: column;
+    padding: 32px;
+  }
+
+  .progress-stats {
+    gap: 48px;
+    margin-bottom: 32px;
+  }
+
+  .progress-stat-value {
+    font-size: 44px;
+  }
+
+  .bar-chart-container {
+    flex: 1;
+    min-height: 360px;
+    display: flex;
+    flex-direction: column;
+    padding: 24px;
+  }
+
+  .bar-chart {
+    flex: 1;
+    min-height: 0;
+    height: auto;
+    gap: 8px;
+  }
 }

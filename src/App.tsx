@@ -134,25 +134,23 @@ type Recording = {
   url: string; // object URL for the captured blob
 };
 
-const storage: RecordingStorage = new IndexedDBStorage();
-
 // Which screen is showing.
-type View = "graph" | "list";
+type View = "practice" | "recordings" | "progress";
 
-function formatTimestamp(ms: number): string {
-  return new Date(ms).toLocaleString(undefined, {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });
-}
+const storage: RecordingStorage = new IndexedDBStorage();
 
 function formatDuration(ms: number): string {
   const total = Math.round(ms / 1000);
   const m = Math.floor(total / 60);
   const s = total % 60;
   return `${m}:${s.toString().padStart(2, "0")}`;
+}
+
+function formatTime(ms: number): string {
+  const d = new Date(ms);
+  return `${d.getHours().toString().padStart(2, "0")}:${
+    d.getMinutes().toString().padStart(2, "0")
+  }`;
 }
 
 const WAVEFORM_BARS = 200;
@@ -178,20 +176,125 @@ async function computeWaveformPeaks(url: string): Promise<Float32Array> {
   return peaks;
 }
 
+function getStartOfDay(ms: number): number {
+  const d = new Date(ms);
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+}
+
+function groupRecordingsByDate(
+  recordings: Recording[],
+): { label: string; recordings: Recording[] }[] {
+  const now = Date.now();
+  const todayStart = getStartOfDay(now);
+  const yesterdayStart = todayStart - 24 * 60 * 60 * 1000;
+  const groups: Map<string, Recording[]> = new Map();
+
+  for (const rec of recordings) {
+    const recDay = getStartOfDay(rec.createdAt);
+    let label: string;
+    if (recDay === todayStart) label = "Today";
+    else if (recDay === yesterdayStart) label = "Yesterday";
+    else {
+      const d = new Date(rec.createdAt);
+      label = d.toLocaleDateString(undefined, {
+        month: "short",
+        day: "numeric",
+      });
+    }
+    if (!groups.has(label)) groups.set(label, []);
+    groups.get(label)!.push(rec);
+  }
+
+  return Array.from(groups, ([label, recs]) => ({ label, recordings: recs }));
+}
+
+function computeProgressStats(recordings: Recording[]) {
+  const now = Date.now();
+  const weekAgo = now - 7 * 24 * 60 * 60 * 1000;
+  const sessionsThisWeek = recordings.filter(
+    (r) => r.createdAt >= weekAgo,
+  ).length;
+
+  const recordingDays = new Set(
+    recordings.map((r) => getStartOfDay(r.createdAt)),
+  );
+  let streak = 0;
+  let day = getStartOfDay(now);
+  if (!recordingDays.has(day)) {
+    day -= 24 * 60 * 60 * 1000;
+  }
+  while (recordingDays.has(day)) {
+    streak++;
+    day -= 24 * 60 * 60 * 1000;
+  }
+
+  const dailySessions: { label: string; count: number }[] = [];
+  for (let i = 13; i >= 0; i--) {
+    const dayStart = getStartOfDay(now - i * 24 * 60 * 60 * 1000);
+    const dayEnd = dayStart + 24 * 60 * 60 * 1000;
+    const count = recordings.filter(
+      (r) => r.createdAt >= dayStart && r.createdAt < dayEnd,
+    ).length;
+    let label = "";
+    if (i === 0) label = "today";
+    else if (i === 13) label = "2 wks ago";
+    dailySessions.push({ label, count });
+  }
+
+  return { sessionsThisWeek, streak, dailySessions };
+}
+
+// Transport control glyphs. Deliberately unambiguous and mutually exclusive:
+// ring+dot = record, square = stop, triangle = play, two bars = pause.
+function TransportGlyph({ type }: {
+  type: "record" | "stop" | "play" | "pause";
+}) {
+  switch (type) {
+    case "record":
+      return (
+        <svg viewBox="0 0 24 24" fill="none">
+          <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="1.5" />
+          <circle cx="12" cy="12" r="5" fill="#e0392b" />
+        </svg>
+      );
+    case "stop":
+      return (
+        <svg viewBox="0 0 24 24">
+          <rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor" />
+        </svg>
+      );
+    case "play":
+      return (
+        <svg viewBox="0 0 24 24">
+          <polygon points="8,5 8,19 19,12" fill="currentColor" />
+        </svg>
+      );
+    case "pause":
+      return (
+        <svg viewBox="0 0 24 24">
+          <rect x="7" y="5" width="3.5" height="14" rx="1" fill="currentColor" />
+          <rect x="13.5" y="5" width="3.5" height="14" rx="1" fill="currentColor" />
+        </svg>
+      );
+  }
+}
+
 function App() {
-  const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
-  const [deviceId, setDeviceId] = useState<string>("");
   const [status, setStatus] = useState<Status>("idle");
   const [recordings, setRecordings] = useState<Recording[]>([]);
-  const [view, setView] = useState<View>("graph");
-  const [volume, setVolume] = useState(0);
+  const [view, setView] = useState<View>("practice");
   const [pitch, setPitch] = useState(-1);
-  const [hasInteracted, setHasInteracted] = useState(false);
   const [selectedRecording, setSelectedRecording] = useState<Recording | null>(
     null,
   );
   const [waveformPeaks, setWaveformPeaks] = useState<Float32Array | null>(null);
   const [isPaused, setIsPaused] = useState(false);
+  const [elapsedMs, setElapsedMs] = useState(0);
+  const [playbackMs, setPlaybackMs] = useState(0);
+  const [isDesktop, setIsDesktop] = useState(
+    () => window.matchMedia("(min-width: 768px)").matches,
+  );
 
   const audioContextRef = useRef<AudioContext | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -204,12 +307,22 @@ function App() {
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioElRef = useRef<HTMLAudioElement | null>(null);
   const recordStartRef = useRef<number>(0); // ms epoch when capture started
+  const liveWaveformCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  // Amplitude peaks accumulated over the current take, so the live waveform can
+  // show the whole recording so far (Voice-Memos style) instead of a zoomed-in
+  // snapshot of the latest buffer.
+  const recordingWaveRef = useRef<number[]>([]);
+  const analyserRef = useRef<AnalyserNode | null>(null);
   const waveformCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const peaksRef = useRef<Float32Array | null>(null);
   const playheadRef = useRef<number>(0);
   const waveformRafRef = useRef<number | null>(null);
   const isDraggingRef = useRef<boolean>(false);
   const hasDraggedRef = useRef<boolean>(false);
+  const [recordingPeaks, setRecordingPeaks] = useState<
+    Map<string, Float32Array>
+  >(new Map());
+  const computedPeaksRef = useRef<Set<string>>(new Set());
 
   // Match the canvas backing store to its CSS size (and DPR) so it stays crisp.
   const sizeCanvas = useCallback(() => {
@@ -220,6 +333,15 @@ function App() {
     canvas.width = container.clientWidth * dpr;
     canvas.height = container.clientHeight * dpr;
     // Setting width/height resets the transform, so re-apply DPR scaling here.
+    canvas.getContext("2d")?.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }, []);
+
+  const sizeLiveWaveformCanvas = useCallback(() => {
+    const canvas = liveWaveformCanvasRef.current;
+    if (!canvas) return;
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = canvas.clientWidth * dpr;
+    canvas.height = canvas.clientHeight * dpr;
     canvas.getContext("2d")?.setTransform(dpr, 0, 0, dpr, 0, 0);
   }, []);
 
@@ -313,20 +435,6 @@ function App() {
     }
   }, []);
 
-  // Size + draw the grid on mount, and re-fit on resize / orientation change.
-  useEffect(() => {
-    sizeCanvas();
-    renderGraph();
-    const container = graphRef.current;
-    if (!container) return;
-    const ro = new ResizeObserver(() => {
-      sizeCanvas();
-      renderGraph();
-    });
-    ro.observe(container);
-    return () => ro.disconnect();
-  }, [sizeCanvas, renderGraph]);
-
   const renderWaveform = useCallback(() => {
     const canvas = waveformCanvasRef.current;
     if (!canvas) return;
@@ -349,6 +457,34 @@ function App() {
     }
   }, []);
 
+  // Size + draw the grid on mount, and re-fit on resize / orientation change.
+  useEffect(() => {
+    sizeCanvas();
+    renderGraph();
+    const container = graphRef.current;
+    if (!container) return;
+    const ro = new ResizeObserver(() => {
+      sizeCanvas();
+      renderGraph();
+    });
+    ro.observe(container);
+    return () => ro.disconnect();
+  }, [sizeCanvas, renderGraph]);
+
+  // Re-runs when `status` changes so the canvas gets sized when it mounts on
+  // record start (it's only rendered while recording, so a mount-only effect
+  // would size it before it exists).
+  useEffect(() => {
+    sizeLiveWaveformCanvas();
+    const canvas = liveWaveformCanvasRef.current;
+    if (!canvas) return;
+    const ro = new ResizeObserver(() => {
+      sizeLiveWaveformCanvas();
+    });
+    ro.observe(canvas);
+    return () => ro.disconnect();
+  }, [sizeLiveWaveformCanvas, status]);
+
   useEffect(() => {
     const canvas = waveformCanvasRef.current;
     if (!canvas) return;
@@ -365,6 +501,7 @@ function App() {
     peaksRef.current = peaks;
     setWaveformPeaks(peaks);
     playheadRef.current = 0;
+    setPlaybackMs(0);
   }
 
   function seekToPosition(clientX: number) {
@@ -405,17 +542,6 @@ function App() {
     seekToPosition(e.clientX);
   }
 
-  // Populate the device list. Labels only appear once we have mic permission,
-  // so refresh again after the stream starts.
-  async function refreshDevices() {
-    const all = await navigator.mediaDevices.enumerateDevices();
-    setDevices(all.filter((d) => d.kind === "audioinput"));
-  }
-
-  useEffect(() => {
-    refreshDevices();
-  }, []);
-
   async function loadRecordings() {
     const data = await storage.getAll();
     const loaded: Recording[] = data.map((d) => ({
@@ -427,15 +553,18 @@ function App() {
     setRecordings(loaded);
   }
 
-  useEffect(() => {
+  const loadedRef = useRef<null | undefined>(null);
+  if (loadedRef.current == null) {
+    loadedRef.current = undefined;
     loadRecordings();
-  }, []);
+  }
 
   // The detect-smooth-graph loop, run against any analyser node -- the live mic
   // while recording, or the recorded clip on playback. Identical pitch handling
   // either way, so playback is graphed exactly as if the mic were live.
   const runAnalysis = useCallback(
     (analyser: AnalyserNode, sampleRate: number) => {
+      analyserRef.current = analyser;
       const timeData = new Float32Array(analyser.fftSize);
 
       // Stabilize the reading: gate quiet noise, median-filter jitter, require
@@ -473,13 +602,10 @@ function App() {
         for (let i = 0; i < timeData.length; i++) {
           sum += timeData[i] * timeData[i];
         }
-        const volume = Math.sqrt(sum / timeData.length);
-        setVolume(volume);
+        const vol = Math.sqrt(sum / timeData.length);
 
         // Noise gate: ignore detections when the signal is too quiet to be a note.
-        const raw = volume >= NOISE_GATE
-          ? detectPitch(timeData, sampleRate)
-          : -1;
+        const raw = vol >= NOISE_GATE ? detectPitch(timeData, sampleRate) : -1;
         const now = performance.now();
 
         if (raw > 0) {
@@ -546,6 +672,62 @@ function App() {
         while (history.length && history[0].t < cutoff) history.shift();
 
         renderGraph();
+
+        // Live recording waveform: accumulate one amplitude peak per frame and
+        // draw the whole take as bars. While it fits, bars grow left -> right
+        // (the waveform "expands" as you record); once it fills the strip, the
+        // bars downsample to keep the entire take visible (Voice-Memos style).
+        const lwCanvas = liveWaveformCanvasRef.current;
+        if (lwCanvas) {
+          const lwCtx = lwCanvas.getContext("2d");
+          if (lwCtx) {
+            const dpr = window.devicePixelRatio || 1;
+            const lwWidth = lwCanvas.width / dpr;
+            const lwHeight = lwCanvas.height / dpr;
+
+            // Peak amplitude of this frame (matches the saved-take waveform's
+            // max-abs scaling, so live and played-back waveforms look alike).
+            let peak = 0;
+            for (let i = 0; i < timeData.length; i++) {
+              const a = Math.abs(timeData[i]);
+              if (a > peak) peak = a;
+            }
+            const wave = recordingWaveRef.current;
+            wave.push(peak);
+
+            lwCtx.clearRect(0, 0, lwWidth, lwHeight);
+            lwCtx.fillStyle = "#555";
+
+            const slot = 3; // px per bar (bar + gap)
+            const barW = 2;
+            const maxBars = Math.max(1, Math.floor(lwWidth / slot));
+
+            // Fit the whole take into the strip: take the max of each group once
+            // there are more samples than bar slots.
+            let bars: number[];
+            if (wave.length <= maxBars) {
+              bars = wave;
+            } else {
+              bars = new Array(maxBars);
+              for (let i = 0; i < maxBars; i++) {
+                const start = Math.floor((i * wave.length) / maxBars);
+                const end = Math.floor(((i + 1) * wave.length) / maxBars);
+                let m = 0;
+                for (let j = start; j < end; j++) {
+                  if (wave[j] > m) m = wave[j];
+                }
+                bars[i] = m;
+              }
+            }
+
+            const midY = lwHeight / 2;
+            for (let i = 0; i < bars.length; i++) {
+              const h = Math.max(1, bars[i] * lwHeight);
+              lwCtx.fillRect(i * slot, midY - h / 2, barW, h);
+            }
+          }
+        }
+
         rafRef.current = requestAnimationFrame(tick);
       };
       tick();
@@ -559,6 +741,7 @@ function App() {
     rafRef.current = null;
     streamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current = null;
+    analyserRef.current = null;
     if (audioElRef.current) {
       audioElRef.current.pause();
       audioElRef.current.onended = null;
@@ -566,16 +749,17 @@ function App() {
     }
     audioContextRef.current?.close();
     audioContextRef.current = null;
-    setVolume(0);
     setPitch(-1);
   }, []);
+
+  // Clean up the audio graph on unmount. (Recording object URLs live for the
+  // session; the browser frees them when the page closes.)
+  useEffect(() => teardown, [teardown]);
 
   // Open the mic and start the live pitch graph. Shared by Start and Record so
   // recording can layer onto an already-running monitor (or open the mic itself).
   async function openMic() {
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: deviceId ? { deviceId: { exact: deviceId } } : true,
-    });
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     streamRef.current = stream;
 
     const audioContext = new AudioContext();
@@ -588,17 +772,14 @@ function App() {
     source.connect(analyser);
 
     runAnalysis(analyser, audioContext.sampleRate);
-    refreshDevices();
   }
 
   async function startMonitor() {
-    setHasInteracted(true);
     await openMic();
     setStatus("monitoring");
   }
 
   async function startRecording() {
-    setHasInteracted(true);
     // Record straight from idle by opening the mic first; if we're already
     // monitoring, just attach the recorder to the live stream.
     if (!streamRef.current) await openMic();
@@ -607,6 +788,8 @@ function App() {
     mediaRecorderRef.current = recorder;
     const startedAt = Date.now();
     recordStartRef.current = startedAt;
+    setElapsedMs(0);
+    recordingWaveRef.current = [];
     const chunks: Blob[] = [];
     recorder.ondataavailable = (e) => {
       if (e.data.size) chunks.push(e.data);
@@ -631,6 +814,7 @@ function App() {
         blob,
       };
       storage.save(data);
+      setElapsedMs(0);
     };
     recorder.start();
     setStatus("recording");
@@ -661,7 +845,7 @@ function App() {
     source.connect(analyser);
     analyser.connect(audioContext.destination);
 
-    audio.onended = () => stopPlayback();
+    audio.onended = () => endPlayback();
 
     const updatePlayhead = () => {
       if (audio.duration && selectedRecording) {
@@ -707,7 +891,10 @@ function App() {
     }
   }
 
-  function stopPlayback() {
+  // When a take finishes playing, keep it LOADED -- its pitch contour stays on
+  // the graph and the transport shows Play to replay -- rather than wiping back
+  // to a blank live monitor. Use the × close button to dismiss it back to the mic.
+  function endPlayback() {
     teardown();
     if (waveformRafRef.current !== null) {
       cancelAnimationFrame(waveformRafRef.current);
@@ -716,16 +903,33 @@ function App() {
     setStatus("idle");
     setIsPaused(false);
     playheadRef.current = 0;
+    setPlaybackMs(0);
     renderWaveform();
   }
 
-  // Clean up the audio graph on unmount. (Recording object URLs live for the
-  // session; the browser frees them when the page closes.)
-  useEffect(() => teardown, [teardown]);
+  // Dismiss the loaded take and return to live mic monitoring.
+  async function closeRecording() {
+    teardown();
+    if (waveformRafRef.current !== null) {
+      cancelAnimationFrame(waveformRafRef.current);
+      waveformRafRef.current = null;
+    }
+    setSelectedRecording(null);
+    setWaveformPeaks(null);
+    peaksRef.current = null;
+    playheadRef.current = 0;
+    setPlaybackMs(0);
+    setIsPaused(false);
+    try {
+      await startMonitor();
+    } catch {
+      setStatus("idle");
+    }
+  }
 
-  // Play a take and switch to the graph so its pitch contour is visible.
+  // Play a take and switch to the practice view so its pitch contour is visible.
   function playRecording(rec: Recording) {
-    setView("graph");
+    setView("practice");
     selectRecording(rec);
     startPlayback(rec.url);
   }
@@ -743,145 +947,491 @@ function App() {
     }
   }
 
+  useEffect(() => {
+    if (status === "recording") {
+      const interval = setInterval(() => {
+        setElapsedMs(Date.now() - recordStartRef.current);
+      }, 100);
+      return () => clearInterval(interval);
+    }
+  }, [status]);
+
+  // Mirror the playback position into state (throttled) so the transport's
+  // left time updates without re-rendering every animation frame.
+  useEffect(() => {
+    if (status === "playing" && !isPaused) {
+      const interval = setInterval(() => {
+        const audio = audioElRef.current;
+        if (audio) setPlaybackMs(audio.currentTime * 1000);
+      }, 100);
+      return () => clearInterval(interval);
+    }
+  }, [status, isPaused]);
+
+  useEffect(() => {
+    // Compute on the Recordings view (mobile) or whenever the desktop sidebar
+    // is visible — otherwise the sidebar rows would never get their thumbnails.
+    if (view !== "recordings" && !isDesktop) return;
+    recordings.forEach(async (rec) => {
+      if (!computedPeaksRef.current.has(rec.id)) {
+        computedPeaksRef.current.add(rec.id);
+        const peaks = await computeWaveformPeaks(rec.url);
+        setRecordingPeaks((prev) => {
+          const next = new Map(prev);
+          next.set(rec.id, peaks);
+          return next;
+        });
+      }
+    });
+  }, [view, recordings, isDesktop]);
+
+  // Track wide-viewport (desktop) layout reactively. On desktop the Recordings
+  // archive lives in the sidebar, so the full-page "recordings" view is folded
+  // into "practice" via `effectiveView` (below) rather than by mutating `view`.
+  useEffect(() => {
+    const mq = window.matchMedia("(min-width: 768px)");
+    const handler = (e: MediaQueryListEvent) => setIsDesktop(e.matches);
+    mq.addEventListener("change", handler);
+    return () => mq.removeEventListener("change", handler);
+  }, []);
+
+  const progressStats = computeProgressStats(recordings);
+  const groupedRecordings = groupRecordingsByDate(recordings);
+
+  // Single source of truth for the transport bar. Derived from the existing
+  // engine state so the audio wiring is untouched (see TODO.md §1):
+  //   monitoring (mic live, armed) -> idle  ·  paused/playing split on isPaused
+  //   cold with a take selected    -> loaded (ready to replay)
+  const transportState: "idle" | "recording" | "loaded" | "playing" | "paused" =
+    status === "recording"
+      ? "recording"
+      : status === "playing"
+      ? (isPaused ? "paused" : "playing")
+      : status === "monitoring"
+      ? "idle"
+      : selectedRecording
+      ? "loaded"
+      : "idle";
+  // Mic is open and ready to record (vs. cold idle, where the graph overlay
+  // is the arm gesture and Record is disabled).
+  const armed = status === "monitoring";
+  const totalMs = selectedRecording?.durationMs ?? 0;
+
+  // On desktop the Recordings archive is the sidebar, so the full-page
+  // "recordings" view collapses into "practice" for rendering purposes.
+  const effectiveView = isDesktop && view === "recordings" ? "practice" : view;
+
+  function renderRecordingsList() {
+    if (recordings.length === 0) {
+      return (
+        <div className="list-empty">
+          No recordings yet. Start practicing to capture one.
+        </div>
+      );
+    }
+    return groupedRecordings.map((group) => (
+      <div key={group.label} className="recordings-group">
+        <div className="recordings-date-header">{group.label}</div>
+        {group.recordings.map((rec) => {
+          const peaks = recordingPeaks.get(rec.id);
+          const isSelected = selectedRecording?.id === rec.id;
+          return (
+            <div key={rec.id} className={`recording-row${isSelected ? " recording-row-selected" : ""}`}>
+              <button
+                className="recording-row-play"
+                onClick={() => playRecording(rec)}
+              >
+                <div className="recording-info">
+                  <span className="recording-time">
+                    {formatTime(rec.createdAt)}
+                  </span>
+                  <span className="recording-duration">
+                    {formatDuration(rec.durationMs)}
+                  </span>
+                </div>
+              </button>
+              {peaks && (
+                <div className="waveform-thumbnail">
+                  {Array.from({ length: 20 }, (_, i) => {
+                    const peakIndex = Math.floor(
+                      (i * peaks.length) / 20,
+                    );
+                    const height = Math.max(
+                      4,
+                      peaks[peakIndex] * 100,
+                    );
+                    return (
+                      <div
+                        key={i}
+                        className="waveform-bar"
+                        style={{ height: `${height}%` }}
+                      />
+                    );
+                  })}
+                </div>
+              )}
+              <button
+                className="recording-row-delete"
+                onClick={() =>
+                  deleteRecording(rec)}
+              >
+                ×
+              </button>
+            </div>
+          );
+        })}
+      </div>
+    ));
+  }
+
   return (
     <div className="app">
-      <nav className="nav">
-        <div className="nav-controls">
-          <button onClick={() => setView(view === "graph" ? "list" : "graph")}>
-            {view === "graph" ? `Takes (${recordings.length})` : "Graph"}
-          </button>
-
-          <select
-            value={deviceId}
-            onChange={(e) => setDeviceId(e.target.value)}
-            disabled={status !== "idle"}
-          >
-            <option value="">Default input</option>
-            {devices.map((d) => (
-              <option key={d.deviceId} value={d.deviceId}>
-                {d.label || `Microphone ${d.deviceId.slice(0, 6)}`}
-              </option>
-            ))}
-          </select>
+      <aside className="sidebar">
+        <div className="sidebar-header">
+          <span className="sidebar-brand">vox</span>
         </div>
-
-        <div className="nav-readouts">
-          {(() => {
-            const note = pitch > 0 ? noteFromPitch(pitch) : null;
-            const inTune = note ? Math.abs(note.cents) <= 5 : false;
-            return (
-              <div className="nav-pitch">
-                <span
-                  style={{
-                    fontSize: 28,
-                    fontWeight: 700,
-                    color: note ? (inTune ? "#2e9e4f" : "#111") : "#ccc",
-                  }}
-                >
-                  {note ? note.name : "—"}
-                </span>
-              </div>
-            );
-          })()}
-
-          <div style={{ fontSize: 28, fontWeight: 700 }}>
-            {volume.toFixed(3)}
+        <nav className="sidebar-nav">
+          <button
+            className={`sidebar-nav-btn${effectiveView === "practice" ? " sidebar-nav-btn-active" : ""}`}
+            onClick={() => setView("practice")}
+          >
+            Practice
+          </button>
+          <button
+            className={`sidebar-nav-btn${effectiveView === "progress" ? " sidebar-nav-btn-active" : ""}`}
+            onClick={() => setView("progress")}
+          >
+            Progress
+          </button>
+        </nav>
+        <div className="sidebar-recordings">
+          <div className="sidebar-recordings-header">Recordings</div>
+          <div className="sidebar-recordings-list">
+            {renderRecordingsList()}
           </div>
         </div>
-      </nav>
+      </aside>
+      <div className="main-pane">
+      <header className="header">
+        {effectiveView === "practice" && (
+          <>
+            <h1 className="header-title">Practice</h1>
+            {(status === "monitoring" || status === "recording") && (
+              <span className="header-live">
+                <span className="live-dot" /> live
+              </span>
+            )}
+          </>
+        )}
+        {effectiveView === "recordings" && (
+          <>
+            <h1 className="header-title">Recordings</h1>
+            <button
+              className="header-progress-btn"
+              onClick={() => setView("progress")}
+            >
+              <svg
+                viewBox="0 0 20 20"
+                width="16"
+                height="16"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.5"
+              >
+                <rect x="3" y="10" width="3" height="7" rx="0.5" />
+                <rect x="8.5" y="6" width="3" height="11" rx="0.5" />
+                <rect x="14" y="3" width="3" height="14" rx="0.5" />
+              </svg>
+              Progress
+            </button>
+          </>
+        )}
+        {effectiveView === "progress" && (
+          <>
+            <button
+              className="header-back-btn"
+              onClick={() => setView("recordings")}
+            >
+              <svg
+                viewBox="0 0 20 20"
+                width="20"
+                height="20"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M13 4L7 10L13 16" />
+              </svg>
+            </button>
+            <h1 className="header-title">Progress</h1>
+            <span className="header-range">2 weeks</span>
+          </>
+        )}
+      </header>
 
-      {
-        /* Graph stays mounted (display toggle) so the canvas keeps its size and
-          the live loop never draws to a torn-down canvas. */
-      }
-      <div
-        className="graph"
-        ref={graphRef}
-        style={{ display: view === "graph" ? undefined : "none" }}
-      >
-        <canvas ref={canvasRef} />
-        {!hasInteracted && status === "idle" && (
-          <button className="graph-overlay" onClick={startMonitor}>
-            <svg viewBox="0 0 100 100" className="graph-overlay-icon">
-              <polygon points="30,20 30,80 80,50" fill="currentColor" />
-            </svg>
-          </button>
+      <div className="content">
+        {
+          /* Practice view stays mounted (display toggle) so the canvas keeps its
+          size and the live loop never draws to a torn-down canvas. */
+        }
+        <div
+          className="practice-view"
+          style={{ display: effectiveView === "practice" ? undefined : "none" }}
+        >
+          <div className="stats-card">
+            <div className="stats-col">
+              <div className="stats-value">
+                {(() => {
+                  const note = pitch > 0 ? noteFromPitch(pitch) : null;
+                  const inTune = note ? Math.abs(note.cents) <= 5 : false;
+                  return note
+                    ? (
+                      <span style={{ color: inTune ? "#2e9e4f" : "#111" }}>
+                        {note.name}
+                      </span>
+                    )
+                    : (
+                      "—"
+                    );
+                })()}
+              </div>
+              <div className="stats-label">current</div>
+            </div>
+            <div className="stats-divider" />
+            <div className="stats-col">
+              <div className="stats-value">{formatDuration(elapsedMs)}</div>
+              <div className="stats-label">elapsed</div>
+            </div>
+          </div>
+
+          <div className="pitch-graph-container" ref={graphRef}>
+            <canvas ref={canvasRef} />
+            {status === "idle" && !selectedRecording && (
+              <button className="graph-overlay" onClick={startMonitor}>
+                <svg viewBox="0 0 100 100" className="graph-overlay-icon">
+                  <polygon points="30,20 30,80 80,50" fill="currentColor" />
+                </svg>
+              </button>
+            )}
+          </div>
+
+          <div className="transport">
+            <div className="transport-waveform">
+              {transportState === "idle"
+                ? <div className="wf-flat" />
+                : transportState === "recording"
+                ? <canvas ref={liveWaveformCanvasRef} className="transport-live-waveform" />
+                : (
+                  <>
+                    <button
+                      className="transport-waveform-btn"
+                      onClick={handleWaveformClick}
+                      onMouseDown={handleWaveformPointerDown}
+                      onMouseMove={handleWaveformPointerMove}
+                      onMouseUp={handleWaveformPointerUp}
+                      onMouseLeave={handleWaveformPointerUp}
+                      onTouchStart={handleWaveformPointerDown}
+                      onTouchMove={handleWaveformPointerMove}
+                      onTouchEnd={handleWaveformPointerUp}
+                    >
+                      <canvas ref={waveformCanvasRef} />
+                    </button>
+                    <button
+                      className="transport-close-btn"
+                      onClick={closeRecording}
+                      aria-label="Close recording"
+                    >
+                      <svg
+                        viewBox="0 0 20 20"
+                        width="18"
+                        height="18"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                      >
+                        <path d="M5 5l10 10M15 5L5 15" />
+                      </svg>
+                    </button>
+                  </>
+                )}
+            </div>
+
+            <div className="transport-row">
+              <span className="transport-time">
+                {transportState === "recording"
+                  ? (
+                    <span className="rec-meta">
+                      <span className="rec-blink" />
+                      {formatDuration(elapsedMs)}
+                    </span>
+                  )
+                  : transportState === "playing" || transportState === "paused"
+                  ? formatDuration(playbackMs)
+                  : "0:00"}
+              </span>
+
+              <div className="transport-center">
+                {transportState === "idle" && (
+                  <button
+                    className="transport-btn"
+                    onClick={startRecording}
+                    disabled={!armed}
+                    aria-label="Record"
+                  >
+                    <TransportGlyph type="record" />
+                  </button>
+                )}
+                {transportState === "recording" && (
+                  <button
+                    className="transport-btn"
+                    onClick={stopRecording}
+                    aria-label="Stop"
+                  >
+                    <TransportGlyph type="stop" />
+                  </button>
+                )}
+                {transportState === "loaded" && (
+                  <button
+                    className="transport-btn"
+                    onClick={() =>
+                      selectedRecording && playRecording(selectedRecording)}
+                    aria-label="Play"
+                  >
+                    <TransportGlyph type="play" />
+                  </button>
+                )}
+                {transportState === "playing" && (
+                  <button
+                    className="transport-btn"
+                    onClick={pausePlayback}
+                    aria-label="Pause"
+                  >
+                    <TransportGlyph type="pause" />
+                  </button>
+                )}
+                {transportState === "paused" && (
+                  <button
+                    className="transport-btn"
+                    onClick={resumePlayback}
+                    aria-label="Play"
+                  >
+                    <TransportGlyph type="play" />
+                  </button>
+                )}
+              </div>
+
+              <span className="transport-time right">
+                {transportState === "idle"
+                  ? "0:00"
+                  : transportState === "recording"
+                  ? ""
+                  : formatDuration(totalMs)}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        {effectiveView === "recordings" && (
+          <div className="recordings-view">
+            {renderRecordingsList()}
+          </div>
+        )}
+
+        {effectiveView === "progress" && (
+          <div className="progress-view">
+            <div className="progress-stats">
+              <div className="progress-stat">
+                <div className="progress-stat-value">
+                  {progressStats.sessionsThisWeek}
+                </div>
+                <div className="progress-stat-label">sessions this week</div>
+              </div>
+              <div className="progress-stat">
+                <div className="progress-stat-value">
+                  {progressStats.streak}
+                  <span className="progress-stat-unit">days</span>
+                </div>
+                <div className="progress-stat-label">streak</div>
+              </div>
+              <div className="progress-stat progress-stat-desktop">
+                <div className="progress-stat-value">
+                  {recordings.length}
+                </div>
+                <div className="progress-stat-label">sessions total</div>
+              </div>
+            </div>
+
+            <div className="bar-chart-container">
+              <div className="bar-chart">
+                {(() => {
+                  const maxCount = Math.max(
+                    1,
+                    ...progressStats.dailySessions.map((d) => d.count),
+                  );
+                  return progressStats.dailySessions.map((day, i) => (
+                    <div key={i} className="bar-chart-bar-container">
+                      <div
+                        className="bar-chart-bar"
+                        style={{
+                          height: day.count > 0
+                            ? `${Math.max(8, (day.count / maxCount) * 100)}%`
+                            : "4px",
+                        }}
+                      />
+                    </div>
+                  ));
+                })()}
+              </div>
+              <div className="bar-chart-labels">
+                <span>2 wks ago</span>
+                <span>today</span>
+              </div>
+            </div>
+          </div>
         )}
       </div>
 
-      {view === "list" && (
-        <div className="list">
-          {recordings.length === 0
-            ? (
-              <div className="list-empty">
-                No takes yet. Hit Record to capture one.
-              </div>
-            )
-            : (
-              recordings.map((rec) => (
-                <div key={rec.id} className="list-row">
-                  <button
-                    className="list-row-play"
-                    onClick={() => playRecording(rec)}
-                  >
-                    <span className="list-time">
-                      {formatTimestamp(rec.createdAt)}
-                    </span>
-                    <span className="list-dur">
-                      {formatDuration(rec.durationMs)}
-                    </span>
-                  </button>
-                  <button
-                    className="list-row-delete"
-                    onClick={() => deleteRecording(rec)}
-                  >
-                    Delete
-                  </button>
-                </div>
-              ))
-            )}
-        </div>
-      )}
-
-      <div className="transport">
+      <nav className="tab-bar">
         <button
-          className="transport-waveform-btn"
-          onClick={handleWaveformClick}
-          onMouseDown={handleWaveformPointerDown}
-          onMouseMove={handleWaveformPointerMove}
-          onMouseUp={handleWaveformPointerUp}
-          onMouseLeave={handleWaveformPointerUp}
-          onTouchStart={handleWaveformPointerDown}
-          onTouchMove={handleWaveformPointerMove}
-          onTouchEnd={handleWaveformPointerUp}
+          className={`tab ${effectiveView === "practice" ? "tab-active" : ""}`}
+          onClick={() => setView("practice")}
         >
-          <canvas ref={waveformCanvasRef} />
+          <svg
+            viewBox="0 0 24 24"
+            className="tab-icon"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+          >
+            <path d="M2 12C6 4 10 4 12 12C14 20 18 20 22 12" />
+          </svg>
+          Practice
         </button>
-        <div className="transport-controls">
-          {status === "recording"
-            ? <button onClick={stopRecording}>Stop rec</button>
-            : (
-              <button onClick={startRecording} disabled={status === "playing"}>
-                Record
-              </button>
-            )}
-
-          {status === "playing" && !isPaused
-            ? <button onClick={pausePlayback}>Pause</button>
-            : status === "playing" && isPaused
-            ? <button onClick={resumePlayback}>Resume</button>
-            : (
-              <button
-                onClick={() =>
-                  selectedRecording && playRecording(selectedRecording)}
-                disabled={status === "recording" || !selectedRecording}
-              >
-                Play
-              </button>
-            )}
-
-          {status === "playing" && <button onClick={stopPlayback}>Stop</button>}
-        </div>
+        <button
+          className={`tab ${
+            effectiveView === "recordings" || effectiveView === "progress" ? "tab-active" : ""
+          }`}
+          onClick={() => setView("recordings")}
+        >
+          <svg
+            viewBox="0 0 24 24"
+            className="tab-icon"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+          >
+            <line x1="4" y1="6" x2="20" y2="6" />
+            <line x1="4" y1="12" x2="20" y2="12" />
+            <line x1="4" y1="18" x2="20" y2="18" />
+          </svg>
+          Recordings
+        </button>
+      </nav>
       </div>
     </div>
   );
