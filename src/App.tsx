@@ -13,7 +13,6 @@ import { type LiveWaveformHandle, type PlaybackWaveformHandle } from "./componen
 import { Transport } from "./components/Transport";
 import { ProgressBar } from "./components/ProgressBar";
 import { Sidebar, RecordingsList } from "./components/Sidebar";
-import { Header } from "./components/Header";
 import { TabBar } from "./components/TabBar";
 import { StatsCard } from "./components/StatsCard";
 import { useDesktopMediaQuery } from "./hooks/useDesktopMediaQuery";
@@ -191,8 +190,6 @@ function App() {
         onDeleteRecording={deleteRecording}
       />
       <div className="main-pane">
-        <Header effectiveView={effectiveView} status={status} onSetView={setView} />
-
         <div className="content">
           {
             /* Practice view stays mounted (display toggle) so the canvas keeps its
@@ -237,6 +234,24 @@ function App() {
 
           {effectiveView === "recordings" && (
             <div className="recordings-view">
+              <button
+                className="recordings-progress-btn"
+                onClick={() => setView("progress")}
+              >
+                <svg
+                  viewBox="0 0 20 20"
+                  width="16"
+                  height="16"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                >
+                  <rect x="3" y="10" width="3" height="7" rx="0.5" />
+                  <rect x="8.5" y="6" width="3" height="11" rx="0.5" />
+                  <rect x="14" y="3" width="3" height="14" rx="0.5" />
+                </svg>
+                Progress
+              </button>
               <RecordingsList
                 groupedRecordings={groupedRecordings}
                 recordingPeaks={recordingPeaks}

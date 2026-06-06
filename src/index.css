@@ -12,88 +12,6 @@ body {
   height: 100dvh;
 }
 
-/* Header */
-.header {
-  display: flex;
-  align-items: center;
-  padding: 16px;
-  border-bottom: 1px solid #eee;
-  min-height: 56px;
-  box-sizing: border-box;
-  gap: 12px;
-}
-
-.header-title {
-  font-size: 22px;
-  font-weight: 700;
-  margin: 0;
-  flex: 1;
-}
-
-.header-live {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 14px;
-  color: #888;
-}
-
-.live-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: #2e9e4f;
-  display: inline-block;
-}
-
-.header-progress-btn {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 14px;
-  border: 1px solid #ccc;
-  border-radius: 20px;
-  background: none;
-  font-size: 14px;
-  cursor: pointer;
-  color: #333;
-}
-
-.header-progress-btn:active {
-  background: #f2f2f2;
-}
-
-.header-close-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 6px;
-  border: none;
-  border-radius: 50%;
-  background: none;
-  cursor: pointer;
-  color: #888;
-}
-
-.header-close-btn:active {
-  background: #f2f2f2;
-}
-
-.header-back-btn {
-  padding: 4px;
-  border: none;
-  background: none;
-  cursor: pointer;
-  color: #333;
-  display: flex;
-  align-items: center;
-}
-
-.header-range {
-  font-size: 14px;
-  color: #888;
-}
-
 /* Content area */
 .content {
   flex: 1;
@@ -111,7 +29,7 @@ body {
 .stats-card {
   display: flex;
   align-items: center;
-  margin: 16px 16px 0;
+  margin: 16px 16px 12px;
   padding: 16px 24px;
   border: 1px solid #ddd;
   border-radius: 12px;
@@ -345,6 +263,26 @@ body {
   overflow-y: auto;
 }
 
+.recordings-progress-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin: 12px 16px;
+  padding: 6px 14px;
+  border: 1px solid #ccc;
+  border-radius: 20px;
+  background: none;
+  font-size: 14px;
+  cursor: pointer;
+  color: #333;
+  width: calc(100% - 32px);
+}
+
+.recordings-progress-btn:active {
+  background: #f2f2f2;
+}
+
 .recordings-group {
   padding: 0 16px;
 }
@@ -507,20 +445,6 @@ body {
 /* Sidebar — hidden on mobile */
 .sidebar {
   display: none;
-}
-
-.sidebar-header {
-  display: flex;
-  align-items: center;
-  padding: 16px;
-  border-bottom: 1px solid #eee;
-  min-height: 56px;
-  box-sizing: border-box;
-}
-
-.sidebar-brand {
-  font-size: 22px;
-  font-weight: 700;
 }
 
 .sidebar-nav {

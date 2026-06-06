@@ -100,9 +100,6 @@ export function Sidebar({
 }: SidebarProps) {
   return (
     <aside className="sidebar">
-      <div className="sidebar-header">
-        <span className="sidebar-brand">vox</span>
-      </div>
       <nav className="sidebar-nav">
         <button
           className={`sidebar-nav-btn${effectiveView === "practice" ? " sidebar-nav-btn-active" : ""}`}
