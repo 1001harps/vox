@@ -15,11 +15,18 @@ const DB_NAME = "vox-recordings";
 const DB_VERSION = 1;
 const STORE_NAME = "recordings";
 
+let dbPromise: Promise<IDBDatabase> | null = null;
+
 function openDB(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
+  if (dbPromise) return dbPromise;
+  dbPromise = new Promise((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
-    request.onerror = () => reject(request.error);
-    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => { dbPromise = null; reject(request.error); };
+    request.onsuccess = () => {
+      const db = request.result;
+      db.onclose = () => { dbPromise = null; };
+      resolve(db);
+    };
     request.onupgradeneeded = () => {
       const db = request.result;
       if (!db.objectStoreNames.contains(STORE_NAME)) {
@@ -28,6 +35,7 @@ function openDB(): Promise<IDBDatabase> {
       }
     };
   });
+  return dbPromise;
 }
 
 export class IndexedDBStorage implements RecordingStorage {
@@ -39,7 +47,6 @@ export class IndexedDBStorage implements RecordingStorage {
       const request = store.put(recording);
       request.onerror = () => reject(request.error);
       request.onsuccess = () => resolve();
-      tx.oncomplete = () => db.close();
     });
   }
 
@@ -55,7 +62,6 @@ export class IndexedDBStorage implements RecordingStorage {
         const results = request.result as RecordingData[];
         resolve(results.sort((a, b) => b.createdAt - a.createdAt));
       };
-      tx.oncomplete = () => db.close();
     });
   }
 
@@ -67,7 +73,6 @@ export class IndexedDBStorage implements RecordingStorage {
       const request = store.delete(id);
       request.onerror = () => reject(request.error);
       request.onsuccess = () => resolve();
-      tx.oncomplete = () => db.close();
     });
   }
 }

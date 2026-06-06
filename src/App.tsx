@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   IndexedDBStorage,
   type RecordingData,
@@ -55,38 +55,41 @@ function detectPitch(buf: Float32Array, sampleRate: number): number {
 
   const trimmed = buf.subarray(start, end);
   const n = trimmed.length;
-  const c = new Float32Array(n);
-  for (let lag = 0; lag < n; lag++) {
+
+  let c0 = 0;
+  for (let i = 0; i < n; i++) c0 += trimmed[i] * trimmed[i];
+  if (c0 === 0) return -1;
+
+  const minLag = Math.max(1, Math.floor(sampleRate / 1000));
+  const maxLag = Math.min(n - 2, Math.ceil(sampleRate / 80));
+  const c = new Float32Array(maxLag + 2);
+  for (let lag = minLag; lag <= maxLag + 1; lag++) {
     let sum = 0;
     for (let i = 0; i < n - lag; i++) sum += trimmed[i] * trimmed[i + lag];
     c[lag] = sum;
   }
 
-  // Skip the initial downslope, then find the highest correlation peak.
-  let d = 0;
-  while (d < n - 1 && c[d] > c[d + 1]) d++;
   let maxVal = -1;
-  let maxLag = -1;
-  for (let lag = d; lag < n; lag++) {
+  let bestLag = -1;
+  for (let lag = minLag; lag <= maxLag; lag++) {
     if (c[lag] > maxVal) {
       maxVal = c[lag];
-      maxLag = lag;
+      bestLag = lag;
     }
   }
-  if (maxLag <= 0 || maxLag >= n - 1) return -1;
+  if (bestLag <= 0) return -1;
 
-  // Clarity = peak correlation relative to zero-lag energy (c[0]). Periodic
-  // tones approach 1; noise/transients stay low. Reject anything too low.
-  if (maxVal / c[0] < CLARITY_THRESHOLD) return -1;
+  if (maxVal / c0 < CLARITY_THRESHOLD) return -1;
 
-  // Parabolic interpolation around the peak for sub-sample accuracy.
-  let t0 = maxLag;
-  const x1 = c[maxLag - 1];
-  const x2 = c[maxLag];
-  const x3 = c[maxLag + 1];
-  const a = (x1 + x3 - 2 * x2) / 2;
-  const b = (x3 - x1) / 2;
-  if (a) t0 = maxLag - b / (2 * a);
+  let t0 = bestLag;
+  if (bestLag > minLag && bestLag < maxLag) {
+    const x1 = c[bestLag - 1];
+    const x2 = c[bestLag];
+    const x3 = c[bestLag + 1];
+    const a = (x1 + x3 - 2 * x2) / 2;
+    const b = (x3 - x1) / 2;
+    if (a) t0 = bestLag - b / (2 * a);
+  }
 
   return sampleRate / t0;
 }
@@ -118,8 +121,9 @@ function freqToMidi(freq: number): number {
   return 69 + 12 * Math.log2(freq / 440);
 }
 
+const BLACK_KEYS = "010100101010";
 function isBlackKey(midi: number): boolean {
-  return [1, 3, 6, 8, 10].includes(((midi % 12) + 12) % 12);
+  return BLACK_KEYS[((midi % 12) + 12) % 12] === "1";
 }
 
 // idle = nothing running, monitoring = live graph only, recording = monitor +
@@ -212,15 +216,21 @@ function groupRecordingsByDate(
 function computeProgressStats(recordings: Recording[]) {
   const now = Date.now();
   const weekAgo = now - 7 * 24 * 60 * 60 * 1000;
-  const sessionsThisWeek = recordings.filter(
-    (r) => r.createdAt >= weekAgo,
-  ).length;
+  const todayStart = getStartOfDay(now);
 
-  const recordingDays = new Set(
-    recordings.map((r) => getStartOfDay(r.createdAt)),
-  );
+  let sessionsThisWeek = 0;
+  const recordingDays = new Set<number>();
+  const dailyCounts = new Map<number, number>();
+
+  for (const r of recordings) {
+    if (r.createdAt >= weekAgo) sessionsThisWeek++;
+    const dayStart = getStartOfDay(r.createdAt);
+    recordingDays.add(dayStart);
+    dailyCounts.set(dayStart, (dailyCounts.get(dayStart) || 0) + 1);
+  }
+
   let streak = 0;
-  let day = getStartOfDay(now);
+  let day = todayStart;
   if (!recordingDays.has(day)) {
     day -= 24 * 60 * 60 * 1000;
   }
@@ -232,14 +242,10 @@ function computeProgressStats(recordings: Recording[]) {
   const dailySessions: { label: string; count: number }[] = [];
   for (let i = 13; i >= 0; i--) {
     const dayStart = getStartOfDay(now - i * 24 * 60 * 60 * 1000);
-    const dayEnd = dayStart + 24 * 60 * 60 * 1000;
-    const count = recordings.filter(
-      (r) => r.createdAt >= dayStart && r.createdAt < dayEnd,
-    ).length;
     let label = "";
     if (i === 0) label = "today";
     else if (i === 13) label = "2 wks ago";
-    dailySessions.push({ label, count });
+    dailySessions.push({ label, count: dailyCounts.get(dayStart) || 0 });
   }
 
   return { sessionsThisWeek, streak, dailySessions };
@@ -284,7 +290,6 @@ function App() {
   const [status, setStatus] = useState<Status>("idle");
   const [recordings, setRecordings] = useState<Recording[]>([]);
   const [view, setView] = useState<View>("practice");
-  const [pitch, setPitch] = useState(-1);
   const [selectedRecording, setSelectedRecording] = useState<Recording | null>(
     null,
   );
@@ -301,7 +306,10 @@ function App() {
   const rafRef = useRef<number | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const graphRef = useRef<HTMLDivElement | null>(null);
-  const historyRef = useRef<Sample[]>([]);
+  const pitchDisplayRef = useRef<HTMLSpanElement | null>(null);
+  const gridCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  type HistoryBuffer = { samples: Sample[]; start: number };
+  const historyRef = useRef<HistoryBuffer>({ samples: [], start: 0 });
 
   // Recording capture + playback element.
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -325,6 +333,57 @@ function App() {
   const computedPeaksRef = useRef<Set<string>>(new Set());
 
   // Match the canvas backing store to its CSS size (and DPR) so it stays crisp.
+  const drawGridToCache = useCallback((width: number, height: number) => {
+    if (width <= 0 || height <= 0) return;
+    let grid = gridCanvasRef.current;
+    if (!grid) {
+      grid = document.createElement("canvas");
+      gridCanvasRef.current = grid;
+    }
+    const dpr = window.devicePixelRatio || 1;
+    grid.width = width * dpr;
+    grid.height = height * dpr;
+    const ctx = grid.getContext("2d");
+    if (!ctx) return;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    const laneH = height / LANES;
+
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(0, 0, width, height);
+
+    ctx.textBaseline = "middle";
+    for (let midi = MIN_MIDI; midi <= MAX_MIDI; midi++) {
+      const top = (MAX_MIDI - midi) * laneH;
+      const mid = top + laneH / 2;
+
+      if (isBlackKey(midi)) {
+        ctx.fillStyle = "#f2f2f2";
+        ctx.fillRect(0, top, width, laneH);
+      }
+      ctx.strokeStyle = "#ececec";
+      ctx.beginPath();
+      ctx.moveTo(0, top);
+      ctx.lineTo(width, top);
+      ctx.stroke();
+
+      if (!isBlackKey(midi)) {
+        const name = NOTE_NAMES[((midi % 12) + 12) % 12];
+        const isC = midi % 12 === 0;
+        ctx.fillStyle = isC ? "#555" : "#aaa";
+        ctx.font = `${isC ? 600 : 400} 11px system-ui, sans-serif`;
+        ctx.fillText(`${name}${Math.floor(midi / 12) - 1}`, 6, mid);
+      }
+    }
+
+    ctx.strokeStyle = "#ddd";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(width / 2, 0);
+    ctx.lineTo(width / 2, height);
+    ctx.stroke();
+  }, []);
+
   const sizeCanvas = useCallback(() => {
     const canvas = canvasRef.current;
     const container = graphRef.current;
@@ -332,9 +391,9 @@ function App() {
     const dpr = window.devicePixelRatio || 1;
     canvas.width = container.clientWidth * dpr;
     canvas.height = container.clientHeight * dpr;
-    // Setting width/height resets the transform, so re-apply DPR scaling here.
     canvas.getContext("2d")?.setTransform(dpr, 0, 0, dpr, 0, 0);
-  }, []);
+    drawGridToCache(container.clientWidth, container.clientHeight);
+  }, [drawGridToCache]);
 
   const sizeLiveWaveformCanvas = useCallback(() => {
     const canvas = liveWaveformCanvasRef.current;
@@ -357,59 +416,26 @@ function App() {
     const width = canvas.width / dpr;
     const height = canvas.height / dpr;
     const laneH = height / LANES;
-    // Center of the lane for a (possibly fractional) MIDI value.
     const midiToY = (midi: number) => (MAX_MIDI - midi + 0.5) * laneH;
-    // Map a timestamp to X: now -> center, now - WINDOW_MS -> left edge.
-    // The right half is "future" (empty) so the contour reads like a playhead.
     const now = performance.now();
     const timeToX = (t: number) => (width / 2) * (1 - (now - t) / WINDOW_MS);
 
-    // Opaque white background so saved PNGs aren't transparent.
-    ctx.fillStyle = "#fff";
-    ctx.fillRect(0, 0, width, height);
-
-    // --- Piano-roll grid ---
-    ctx.textBaseline = "middle";
-    for (let midi = MIN_MIDI; midi <= MAX_MIDI; midi++) {
-      const top = (MAX_MIDI - midi) * laneH;
-      const mid = top + laneH / 2;
-
-      if (isBlackKey(midi)) {
-        ctx.fillStyle = "#f2f2f2";
-        ctx.fillRect(0, top, width, laneH);
-      }
-      ctx.strokeStyle = "#ececec";
-      ctx.beginPath();
-      ctx.moveTo(0, top);
-      ctx.lineTo(width, top);
-      ctx.stroke();
-
-      // Label natural notes only; make each C bolder for octave orientation.
-      if (!isBlackKey(midi)) {
-        const name = NOTE_NAMES[((midi % 12) + 12) % 12];
-        const isC = midi % 12 === 0;
-        ctx.fillStyle = isC ? "#555" : "#aaa";
-        ctx.font = `${isC ? 600 : 400} 11px system-ui, sans-serif`;
-        ctx.fillText(`${name}${Math.floor(midi / 12) - 1}`, 6, mid);
-      }
+    const grid = gridCanvasRef.current;
+    if (grid && grid.width > 0 && grid.height > 0) {
+      ctx.save();
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.drawImage(grid, 0, 0);
+      ctx.restore();
     }
 
-    // Faint "now" playhead down the center.
-    ctx.strokeStyle = "#ddd";
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(width / 2, 0);
-    ctx.lineTo(width / 2, height);
-    ctx.stroke();
-
-    // --- Pitch contour: connect samples, breaking the line on NaN (silence) ---
     const history = historyRef.current;
     ctx.strokeStyle = "#333";
     ctx.lineWidth = 2;
     ctx.lineJoin = "round";
     ctx.beginPath();
     let penDown = false;
-    for (const s of history) {
+    for (let i = history.start; i < history.samples.length; i++) {
+      const s = history.samples[i];
       if (Number.isNaN(s.midi)) {
         penDown = false;
         continue;
@@ -422,8 +448,8 @@ function App() {
     }
     ctx.stroke();
 
-    // --- Head dot: the most recent reading, colored by how in-tune it is ---
-    const last = history[history.length - 1];
+    const lastIdx = history.samples.length - 1;
+    const last = lastIdx >= history.start ? history.samples[lastIdx] : undefined;
     if (last && !Number.isNaN(last.midi)) {
       const freq = 440 * Math.pow(2, (last.midi - 69) / 12);
       const inTune = Math.abs(noteFromPitch(freq).cents) <= 5;
@@ -593,7 +619,7 @@ function App() {
       let recentRaw: number[] = [];
       let candidate = -1; // a pending note-change waiting to be confirmed
       let candidateFrames = 0;
-      historyRef.current = [];
+      historyRef.current = { samples: [], start: 0 };
 
       const tick = () => {
         analyser.getFloatTimeDomainData(timeData);
@@ -650,26 +676,36 @@ function App() {
           // transition ramps smoothly (like a voice) instead of a square jump.
           smoothed *= Math.pow(target / smoothed, DISPLAY_EASE);
           lastGoodTime = now;
-          setPitch(smoothed);
+          const pitchEl = pitchDisplayRef.current;
+          if (pitchEl) {
+            const note = noteFromPitch(smoothed);
+            const inTune = Math.abs(note.cents) <= 5;
+            pitchEl.textContent = note.name;
+            pitchEl.style.color = inTune ? "#2e9e4f" : "#111";
+          }
         } else {
-          // Gap: reset filters so the next phrase starts clean.
           recentRaw = [];
           candidate = -1;
           candidateFrames = 0;
           if (now - lastGoodTime > HOLD_MS) {
             smoothed = -1;
             target = -1;
-            setPitch(-1);
+            const pitchEl = pitchDisplayRef.current;
+            if (pitchEl) {
+              pitchEl.textContent = "\u2014";
+              pitchEl.style.color = "#111";
+            }
           }
         }
 
-        // Append this frame to the history. Plot only frames that actually had a
-        // detection (raw > 0); silence pushes NaN so the contour ends immediately
-        // instead of trailing the held note across the hold window.
         const history = historyRef.current;
-        history.push({ t: now, midi: raw > 0 ? freqToMidi(smoothed) : NaN });
+        history.samples.push({ t: now, midi: raw > 0 ? freqToMidi(smoothed) : NaN });
         const cutoff = now - WINDOW_MS;
-        while (history.length && history[0].t < cutoff) history.shift();
+        while (history.start < history.samples.length && history.samples[history.start].t < cutoff) history.start++;
+        if (history.start > 512) {
+          history.samples.splice(0, history.start);
+          history.start = 0;
+        }
 
         renderGraph();
 
@@ -749,7 +785,11 @@ function App() {
     }
     audioContextRef.current?.close();
     audioContextRef.current = null;
-    setPitch(-1);
+    const pitchEl = pitchDisplayRef.current;
+    if (pitchEl) {
+      pitchEl.textContent = "\u2014";
+      pitchEl.style.color = "#111";
+    }
   }, []);
 
   // Clean up the audio graph on unmount. (Recording object URLs live for the
@@ -969,20 +1009,27 @@ function App() {
   }, [status, isPaused]);
 
   useEffect(() => {
-    // Compute on the Recordings view (mobile) or whenever the desktop sidebar
-    // is visible — otherwise the sidebar rows would never get their thumbnails.
     if (view !== "recordings" && !isDesktop) return;
-    recordings.forEach(async (rec) => {
-      if (!computedPeaksRef.current.has(rec.id)) {
+    let cancelled = false;
+
+    async function computeRemaining() {
+      for (const rec of recordings) {
+        if (cancelled) return;
+        if (computedPeaksRef.current.has(rec.id)) continue;
         computedPeaksRef.current.add(rec.id);
         const peaks = await computeWaveformPeaks(rec.url);
+        if (cancelled) return;
         setRecordingPeaks((prev) => {
           const next = new Map(prev);
           next.set(rec.id, peaks);
           return next;
         });
+        await new Promise((resolve) => setTimeout(resolve, 0));
       }
-    });
+    }
+
+    computeRemaining();
+    return () => { cancelled = true; };
   }, [view, recordings, isDesktop]);
 
   // Track wide-viewport (desktop) layout reactively. On desktop the Recordings
@@ -995,8 +1042,8 @@ function App() {
     return () => mq.removeEventListener("change", handler);
   }, []);
 
-  const progressStats = computeProgressStats(recordings);
-  const groupedRecordings = groupRecordingsByDate(recordings);
+  const progressStats = useMemo(() => computeProgressStats(recordings), [recordings]);
+  const groupedRecordings = useMemo(() => groupRecordingsByDate(recordings), [recordings]);
 
   // Single source of truth for the transport bar. Derived from the existing
   // engine state so the audio wiring is untouched (see TODO.md §1):
@@ -1183,19 +1230,7 @@ function App() {
           <div className="stats-card">
             <div className="stats-col">
               <div className="stats-value">
-                {(() => {
-                  const note = pitch > 0 ? noteFromPitch(pitch) : null;
-                  const inTune = note ? Math.abs(note.cents) <= 5 : false;
-                  return note
-                    ? (
-                      <span style={{ color: inTune ? "#2e9e4f" : "#111" }}>
-                        {note.name}
-                      </span>
-                    )
-                    : (
-                      "—"
-                    );
-                })()}
+                <span ref={pitchDisplayRef}>{"\u2014"}</span>
               </div>
               <div className="stats-label">current</div>
             </div>
