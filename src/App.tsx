@@ -7,14 +7,16 @@ import {
 import type { HistoryBuffer, Recording, Status, View } from "./types";
 import {
   formatDuration,
-  formatTime,
   groupRecordingsByDate,
 } from "./utils/format";
 import { computeProgressStats } from "./utils/progress";
 import { computeWaveformPeaks } from "./utils/waveform";
 import { startAnalysis } from "./audio/analysis";
 import { PitchGraph, type PitchGraphHandle } from "./components/PitchGraph";
-import { LiveWaveform, PlaybackWaveform, type LiveWaveformHandle, type PlaybackWaveformHandle } from "./components/Waveform";
+import { type LiveWaveformHandle, type PlaybackWaveformHandle } from "./components/Waveform";
+import { Transport } from "./components/Transport";
+import { ProgressBar } from "./components/ProgressBar";
+import { Sidebar, RecordingsList } from "./components/Sidebar";
 
 // idle = nothing running, monitoring = live graph only, recording = monitor +
 // capture, playing = playing back a recorded clip.
@@ -24,41 +26,6 @@ import { LiveWaveform, PlaybackWaveform, type LiveWaveformHandle, type PlaybackW
 // Which screen is showing.
 
 const storage: RecordingStorage = new IndexedDBStorage();
-
-// Transport control glyphs. Deliberately unambiguous and mutually exclusive:
-// ring+dot = record, square = stop, triangle = play, two bars = pause.
-function TransportGlyph({ type }: {
-  type: "record" | "stop" | "play" | "pause";
-}) {
-  switch (type) {
-    case "record":
-      return (
-        <svg viewBox="0 0 24 24" fill="none">
-          <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="1.5" />
-          <circle cx="12" cy="12" r="5" fill="#e0392b" />
-        </svg>
-      );
-    case "stop":
-      return (
-        <svg viewBox="0 0 24 24">
-          <rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor" />
-        </svg>
-      );
-    case "play":
-      return (
-        <svg viewBox="0 0 24 24">
-          <polygon points="8,5 8,19 19,12" fill="currentColor" />
-        </svg>
-      );
-    case "pause":
-      return (
-        <svg viewBox="0 0 24 24">
-          <rect x="7" y="5" width="3.5" height="14" rx="1" fill="currentColor" />
-          <rect x="13.5" y="5" width="3.5" height="14" rx="1" fill="currentColor" />
-        </svg>
-      );
-  }
-}
 
 function App() {
   const [status, setStatus] = useState<Status>("idle");
@@ -457,96 +424,17 @@ function App() {
   // "recordings" view collapses into "practice" for rendering purposes.
   const effectiveView = isDesktop && view === "recordings" ? "practice" : view;
 
-  function renderRecordingsList() {
-    if (recordings.length === 0) {
-      return (
-        <div className="list-empty">
-          No recordings yet. Start practicing to capture one.
-        </div>
-      );
-    }
-    return groupedRecordings.map((group) => (
-      <div key={group.label} className="recordings-group">
-        <div className="recordings-date-header">{group.label}</div>
-        {group.recordings.map((rec) => {
-          const peaks = recordingPeaks.get(rec.id);
-          const isSelected = selectedRecording?.id === rec.id;
-          return (
-            <div key={rec.id} className={`recording-row${isSelected ? " recording-row-selected" : ""}`}>
-              <button
-                className="recording-row-play"
-                onClick={() => playRecording(rec)}
-              >
-                <div className="recording-info">
-                  <span className="recording-time">
-                    {formatTime(rec.createdAt)}
-                  </span>
-                  <span className="recording-duration">
-                    {formatDuration(rec.durationMs)}
-                  </span>
-                </div>
-              </button>
-              {peaks && (
-                <div className="waveform-thumbnail">
-                  {Array.from({ length: 20 }, (_, i) => {
-                    const peakIndex = Math.floor(
-                      (i * peaks.length) / 20,
-                    );
-                    const height = Math.max(
-                      4,
-                      peaks[peakIndex] * 100,
-                    );
-                    return (
-                      <div
-                        key={i}
-                        className="waveform-bar"
-                        style={{ height: `${height}%` }}
-                      />
-                    );
-                  })}
-                </div>
-              )}
-              <button
-                className="recording-row-delete"
-                onClick={() =>
-                  deleteRecording(rec)}
-              >
-                ×
-              </button>
-            </div>
-          );
-        })}
-      </div>
-    ));
-  }
-
   return (
     <div className="app">
-      <aside className="sidebar">
-        <div className="sidebar-header">
-          <span className="sidebar-brand">vox</span>
-        </div>
-        <nav className="sidebar-nav">
-          <button
-            className={`sidebar-nav-btn${effectiveView === "practice" ? " sidebar-nav-btn-active" : ""}`}
-            onClick={() => setView("practice")}
-          >
-            Practice
-          </button>
-          <button
-            className={`sidebar-nav-btn${effectiveView === "progress" ? " sidebar-nav-btn-active" : ""}`}
-            onClick={() => setView("progress")}
-          >
-            Progress
-          </button>
-        </nav>
-        <div className="sidebar-recordings">
-          <div className="sidebar-recordings-header">Recordings</div>
-          <div className="sidebar-recordings-list">
-            {renderRecordingsList()}
-          </div>
-        </div>
-      </aside>
+      <Sidebar
+        effectiveView={effectiveView}
+        groupedRecordings={groupedRecordings}
+        recordingPeaks={recordingPeaks}
+        selectedRecording={selectedRecording}
+        onSetView={setView}
+        onPlayRecording={playRecording}
+        onDeleteRecording={deleteRecording}
+      />
       <div className="main-pane">
       <header className="header">
         {effectiveView === "practice" && (
@@ -640,173 +528,44 @@ function App() {
             )}
           </PitchGraph>
 
-          <div className="transport">
-            <div className="transport-waveform">
-              {transportState === "idle"
-                ? <div className="wf-flat" />
-                : transportState === "recording"
-                ? <LiveWaveform ref={liveWaveformRef} />
-                : (
-                  <>
-                    <PlaybackWaveform
-                      ref={playbackWaveformRef}
-                      peaks={waveformPeaks}
-                      playheadRef={playheadRef}
-                      onSeek={handleWaveformSeek}
-                    />
-                    <button
-                      className="transport-close-btn"
-                      onClick={closeRecording}
-                      aria-label="Close recording"
-                    >
-                      <svg
-                        viewBox="0 0 20 20"
-                        width="18"
-                        height="18"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="2"
-                        strokeLinecap="round"
-                      >
-                        <path d="M5 5l10 10M15 5L5 15" />
-                      </svg>
-                    </button>
-                  </>
-                )}
-            </div>
-
-            <div className="transport-row">
-              <span className="transport-time">
-                {transportState === "recording"
-                  ? (
-                    <span className="rec-meta">
-                      <span className="rec-blink" />
-                      {formatDuration(elapsedMs)}
-                    </span>
-                  )
-                  : transportState === "playing" || transportState === "paused"
-                  ? formatDuration(playbackMs)
-                  : "0:00"}
-              </span>
-
-              <div className="transport-center">
-                {transportState === "idle" && (
-                  <button
-                    className="transport-btn"
-                    onClick={startRecording}
-                    disabled={!armed}
-                    aria-label="Record"
-                  >
-                    <TransportGlyph type="record" />
-                  </button>
-                )}
-                {transportState === "recording" && (
-                  <button
-                    className="transport-btn"
-                    onClick={stopRecording}
-                    aria-label="Stop"
-                  >
-                    <TransportGlyph type="stop" />
-                  </button>
-                )}
-                {transportState === "loaded" && (
-                  <button
-                    className="transport-btn"
-                    onClick={() =>
-                      selectedRecording && playRecording(selectedRecording)}
-                    aria-label="Play"
-                  >
-                    <TransportGlyph type="play" />
-                  </button>
-                )}
-                {transportState === "playing" && (
-                  <button
-                    className="transport-btn"
-                    onClick={pausePlayback}
-                    aria-label="Pause"
-                  >
-                    <TransportGlyph type="pause" />
-                  </button>
-                )}
-                {transportState === "paused" && (
-                  <button
-                    className="transport-btn"
-                    onClick={resumePlayback}
-                    aria-label="Play"
-                  >
-                    <TransportGlyph type="play" />
-                  </button>
-                )}
-              </div>
-
-              <span className="transport-time right">
-                {transportState === "idle"
-                  ? "0:00"
-                  : transportState === "recording"
-                  ? ""
-                  : formatDuration(totalMs)}
-              </span>
-            </div>
-          </div>
+          <Transport
+            transportState={transportState}
+            armed={armed}
+            elapsedMs={elapsedMs}
+            playbackMs={playbackMs}
+            totalMs={totalMs}
+            waveformPeaks={waveformPeaks}
+            playheadRef={playheadRef}
+            liveWaveformRef={liveWaveformRef}
+            playbackWaveformRef={playbackWaveformRef}
+            selectedRecording={selectedRecording}
+            onSeek={handleWaveformSeek}
+            onClose={closeRecording}
+            onStartRecording={startRecording}
+            onStopRecording={stopRecording}
+            onPlayRecording={playRecording}
+            onPausePlayback={pausePlayback}
+            onResumePlayback={resumePlayback}
+          />
         </div>
 
         {effectiveView === "recordings" && (
           <div className="recordings-view">
-            {renderRecordingsList()}
+            <RecordingsList
+              groupedRecordings={groupedRecordings}
+              recordingPeaks={recordingPeaks}
+              selectedRecording={selectedRecording}
+              onPlayRecording={playRecording}
+              onDeleteRecording={deleteRecording}
+            />
           </div>
         )}
 
         {effectiveView === "progress" && (
-          <div className="progress-view">
-            <div className="progress-stats">
-              <div className="progress-stat">
-                <div className="progress-stat-value">
-                  {progressStats.sessionsThisWeek}
-                </div>
-                <div className="progress-stat-label">sessions this week</div>
-              </div>
-              <div className="progress-stat">
-                <div className="progress-stat-value">
-                  {progressStats.streak}
-                  <span className="progress-stat-unit">days</span>
-                </div>
-                <div className="progress-stat-label">streak</div>
-              </div>
-              <div className="progress-stat progress-stat-desktop">
-                <div className="progress-stat-value">
-                  {recordings.length}
-                </div>
-                <div className="progress-stat-label">sessions total</div>
-              </div>
-            </div>
-
-            <div className="bar-chart-container">
-              <div className="bar-chart">
-                {(() => {
-                  const maxCount = Math.max(
-                    1,
-                    ...progressStats.dailySessions.map((d) => d.count),
-                  );
-                  return progressStats.dailySessions.map((day, i) => (
-                    <div key={i} className="bar-chart-bar-container">
-                      <div
-                        className="bar-chart-bar"
-                        style={{
-                          height: day.count > 0
-                            ? `${Math.max(8, (day.count / maxCount) * 100)}%`
-                            : "4px",
-                        }}
-                      />
-                    </div>
-                  ));
-                })()}
-              </div>
-              <div className="bar-chart-labels">
-                <span>2 wks ago</span>
-                <span>today</span>
-              </div>
-            </div>
-          </div>
+          <ProgressBar
+            stats={progressStats}
+            totalRecordings={recordings.length}
+          />
         )}
       </div>
 
