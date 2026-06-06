@@ -1,29 +1,21 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   IndexedDBStorage,
-  type RecordingData,
   type RecordingStorage,
 } from "./storage";
-import type { HistoryBuffer, Recording, Status, View } from "./types";
+import type { Recording, View } from "./types";
 import {
   formatDuration,
   groupRecordingsByDate,
 } from "./utils/format";
 import { computeProgressStats } from "./utils/progress";
 import { computeWaveformPeaks } from "./utils/waveform";
-import { startAnalysis } from "./audio/analysis";
+import { AudioEngine, type Status } from "./audio/engine";
 import { PitchGraph, type PitchGraphHandle } from "./components/PitchGraph";
 import { type LiveWaveformHandle, type PlaybackWaveformHandle } from "./components/Waveform";
 import { Transport } from "./components/Transport";
 import { ProgressBar } from "./components/ProgressBar";
 import { Sidebar, RecordingsList } from "./components/Sidebar";
-
-// idle = nothing running, monitoring = live graph only, recording = monitor +
-// capture, playing = playing back a recorded clip.
-
-// A saved take. In-memory representation with object URL for playback.
-
-// Which screen is showing.
 
 const storage: RecordingStorage = new IndexedDBStorage();
 
@@ -42,19 +34,8 @@ function App() {
     () => window.matchMedia("(min-width: 768px)").matches,
   );
 
-  const audioContextRef = useRef<AudioContext | null>(null);
-  const streamRef = useRef<MediaStream | null>(null);
   const pitchDisplayRef = useRef<HTMLSpanElement | null>(null);
-  const historyRef = useRef<HistoryBuffer>({ samples: [], start: 0 });
-
-  // Recording capture + playback element.
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const audioElRef = useRef<HTMLAudioElement | null>(null);
-  const recordStartRef = useRef<number>(0); // ms epoch when capture started
-  const analyserRef = useRef<AnalyserNode | null>(null);
   const peaksRef = useRef<Float32Array | null>(null);
-  const playheadRef = useRef<number>(0);
-  const waveformRafRef = useRef<number | null>(null);
   const [recordingPeaks, setRecordingPeaks] = useState<
     Map<string, Float32Array>
   >(new Map());
@@ -65,20 +46,49 @@ function App() {
   const liveWaveformRef = useRef<LiveWaveformHandle>(null);
   const playbackWaveformRef = useRef<PlaybackWaveformHandle>(null);
 
+  const engineRef = useRef<AudioEngine | null>(null);
+  if (!engineRef.current) {
+    engineRef.current = new AudioEngine(storage, {
+      onStatusChange: setStatus,
+      onPausedChange: setIsPaused,
+      onElapsedMsChange: setElapsedMs,
+      onPlaybackMsChange: setPlaybackMs,
+      onRecordingCreated: (recording) => {
+        setRecordings((prev) => [recording, ...prev]);
+        selectRecording(recording);
+      },
+      onPitchUpdate: (noteName, inTune) => {
+        const pitchEl = pitchDisplayRef.current;
+        if (pitchEl) {
+          pitchEl.textContent = noteName;
+          pitchEl.style.color = inTune ? "#2e9e4f" : "#111";
+        }
+      },
+      onPitchClear: () => {
+        const pitchEl = pitchDisplayRef.current;
+        if (pitchEl) {
+          pitchEl.textContent = "\u2014";
+          pitchEl.style.color = "#111";
+        }
+      },
+      onRenderGraph: () => pitchGraphRef.current?.render(),
+      onLiveWaveformFrame: (peak) => liveWaveformRef.current?.drawFrame(peak),
+      onPlaybackWaveformRender: () => playbackWaveformRef.current?.render(),
+    });
+  }
+  const engine = engineRef.current;
+
   async function selectRecording(rec: Recording) {
     setSelectedRecording(rec);
     const peaks = await computeWaveformPeaks(rec.url);
     peaksRef.current = peaks;
     setWaveformPeaks(peaks);
-    playheadRef.current = 0;
+    engine.getPlayheadRef().current = 0;
     setPlaybackMs(0);
   }
 
   function handleWaveformSeek(progress: number) {
-    if (!audioElRef.current || !selectedRecording) return;
-    audioElRef.current.currentTime = progress * audioElRef.current.duration;
-    playheadRef.current = progress;
-    playbackWaveformRef.current?.render();
+    engine.seekTo(progress);
   }
 
   async function loadRecordings() {
@@ -98,229 +108,43 @@ function App() {
     loadRecordings();
   }
 
-  const stopAnalysisRef = useRef<(() => void) | null>(null);
-
-  // The detect-smooth-graph loop, run against any analyser node -- the live mic
-  // while recording, or the recorded clip on playback. Identical pitch handling
-  // either way, so playback is graphed exactly as if the mic were live.
-  const runAnalysis = useCallback(
-    (analyser: AnalyserNode, sampleRate: number) => {
-      analyserRef.current = analyser;
-      stopAnalysisRef.current = startAnalysis(analyser, sampleRate, historyRef, {
-        onRenderGraph: () => pitchGraphRef.current?.render(),
-        onPitchUpdate: (noteName, inTune) => {
-          const pitchEl = pitchDisplayRef.current;
-          if (pitchEl) {
-            pitchEl.textContent = noteName;
-            pitchEl.style.color = inTune ? "#2e9e4f" : "#111";
-          }
-        },
-        onPitchClear: () => {
-          const pitchEl = pitchDisplayRef.current;
-          if (pitchEl) {
-            pitchEl.textContent = "\u2014";
-            pitchEl.style.color = "#111";
-          }
-        },
-        onFrame: (_timeData, peak) => liveWaveformRef.current?.drawFrame(peak),
-      });
-    },
-    [],
-  );
-
-  // Tear down the audio graph + RAF loop, shared by both record and playback.
-  const teardown = useCallback(() => {
-    stopAnalysisRef.current?.();
-    stopAnalysisRef.current = null;
-    streamRef.current?.getTracks().forEach((t) => t.stop());
-    streamRef.current = null;
-    analyserRef.current = null;
-    if (audioElRef.current) {
-      audioElRef.current.pause();
-      audioElRef.current.onended = null;
-      audioElRef.current = null;
-    }
-    audioContextRef.current?.close();
-    audioContextRef.current = null;
-    const pitchEl = pitchDisplayRef.current;
-    if (pitchEl) {
-      pitchEl.textContent = "\u2014";
-      pitchEl.style.color = "#111";
-    }
-  }, []);
-
-  // Clean up the audio graph on unmount. (Recording object URLs live for the
-  // session; the browser frees them when the page closes.)
-  useEffect(() => teardown, [teardown]);
-
-  // Open the mic and start the live pitch graph. Shared by Start and Record so
-  // recording can layer onto an already-running monitor (or open the mic itself).
-  async function openMic() {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    streamRef.current = stream;
-
-    const audioContext = new AudioContext();
-    audioContextRef.current = audioContext;
-    await audioContext.resume();
-
-    const source = audioContext.createMediaStreamSource(stream);
-    const analyser = audioContext.createAnalyser();
-    analyser.fftSize = 2048;
-    source.connect(analyser);
-
-    runAnalysis(analyser, audioContext.sampleRate);
-  }
+  // Clean up the audio graph on unmount.
+  useEffect(() => () => engine.teardown(), [engine]);
 
   async function startMonitor() {
-    await openMic();
-    setStatus("monitoring");
+    await engine.startMonitor();
   }
 
   async function startRecording() {
-    // Record straight from idle by opening the mic first; if we're already
-    // monitoring, just attach the recorder to the live stream.
-    if (!streamRef.current) await openMic();
-
-    const recorder = new MediaRecorder(streamRef.current!);
-    mediaRecorderRef.current = recorder;
-    const startedAt = Date.now();
-    recordStartRef.current = startedAt;
-    setElapsedMs(0);
-    const chunks: Blob[] = [];
-    recorder.ondataavailable = (e) => {
-      if (e.data.size) chunks.push(e.data);
-    };
-    recorder.onstop = () => {
-      const blob = new Blob(chunks, {
-        type: recorder.mimeType || "audio/webm",
-      });
-      const recording: Recording = {
-        id: crypto.randomUUID(),
-        createdAt: startedAt,
-        durationMs: Date.now() - startedAt,
-        url: URL.createObjectURL(blob),
-      };
-      // Newest first.
-      setRecordings((prev) => [recording, ...prev]);
-      selectRecording(recording);
-      const data: RecordingData = {
-        id: recording.id,
-        createdAt: recording.createdAt,
-        durationMs: recording.durationMs,
-        blob,
-      };
-      storage.save(data);
-      setElapsedMs(0);
-    };
-    recorder.start();
-    setStatus("recording");
+    await engine.startRecording();
   }
 
-  // Stop capturing but leave the mic + graph running, so you can keep going.
   function stopRecording() {
-    mediaRecorderRef.current?.stop();
-    mediaRecorderRef.current = null;
-    setStatus("monitoring");
+    engine.stopRecording();
   }
 
   async function startPlayback(url: string) {
-    // Playback drives its own audio graph, so release the mic first.
-    teardown();
-
-    const audio = new Audio(url);
-    audioElRef.current = audio;
-
-    const audioContext = new AudioContext();
-    audioContextRef.current = audioContext;
-    await audioContext.resume();
-
-    // Route the clip through an analyser (for the graph) and on to the speakers.
-    const source = audioContext.createMediaElementSource(audio);
-    const analyser = audioContext.createAnalyser();
-    analyser.fftSize = 2048;
-    source.connect(analyser);
-    analyser.connect(audioContext.destination);
-
-    audio.onended = () => endPlayback();
-
-    const updatePlayhead = () => {
-      if (audio.duration && selectedRecording) {
-        playheadRef.current = audio.currentTime / audio.duration;
-        playbackWaveformRef.current?.render();
-      }
-      if (!isPaused) {
-        waveformRafRef.current = requestAnimationFrame(updatePlayhead);
-      }
-    };
-
-    runAnalysis(analyser, audioContext.sampleRate);
-    await audio.play();
-    setStatus("playing");
-    setIsPaused(false);
-    updatePlayhead();
+    if (!selectedRecording) return;
+    await engine.startPlayback(url, selectedRecording, isPaused);
   }
 
   function pausePlayback() {
-    audioElRef.current?.pause();
-    setIsPaused(true);
-    if (waveformRafRef.current !== null) {
-      cancelAnimationFrame(waveformRafRef.current);
-      waveformRafRef.current = null;
-    }
+    engine.pausePlayback();
   }
 
   async function resumePlayback() {
-    if (audioElRef.current) {
-      await audioElRef.current.play();
-      setIsPaused(false);
-      const audio = audioElRef.current;
-      const updatePlayhead = () => {
-        if (audio.duration && selectedRecording) {
-          playheadRef.current = audio.currentTime / audio.duration;
-          playbackWaveformRef.current?.render();
-        }
-        if (!isPaused) {
-          waveformRafRef.current = requestAnimationFrame(updatePlayhead);
-        }
-      };
-      updatePlayhead();
-    }
-  }
-
-  // When a take finishes playing, keep it LOADED -- its pitch contour stays on
-  // the graph and the transport shows Play to replay -- rather than wiping back
-  // to a blank live monitor. Use the × close button to dismiss it back to the mic.
-  function endPlayback() {
-    teardown();
-    if (waveformRafRef.current !== null) {
-      cancelAnimationFrame(waveformRafRef.current);
-      waveformRafRef.current = null;
-    }
-    setStatus("idle");
-    setIsPaused(false);
-    playheadRef.current = 0;
-    setPlaybackMs(0);
-    playbackWaveformRef.current?.render();
+    if (!selectedRecording) return;
+    await engine.resumePlayback(selectedRecording);
   }
 
   // Dismiss the loaded take and return to live mic monitoring.
   async function closeRecording() {
-    teardown();
-    if (waveformRafRef.current !== null) {
-      cancelAnimationFrame(waveformRafRef.current);
-      waveformRafRef.current = null;
-    }
     setSelectedRecording(null);
     setWaveformPeaks(null);
     peaksRef.current = null;
-    playheadRef.current = 0;
+    engine.getPlayheadRef().current = 0;
     setPlaybackMs(0);
-    setIsPaused(false);
-    try {
-      await startMonitor();
-    } catch {
-      setStatus("idle");
-    }
+    await engine.closeRecording();
   }
 
   // Play a take and switch to the practice view so its pitch contour is visible.
@@ -339,30 +163,9 @@ function App() {
       setSelectedRecording(null);
       setWaveformPeaks(null);
       peaksRef.current = null;
-      playheadRef.current = 0;
+      engine.getPlayheadRef().current = 0;
     }
   }
-
-  useEffect(() => {
-    if (status === "recording") {
-      const interval = setInterval(() => {
-        setElapsedMs(Date.now() - recordStartRef.current);
-      }, 100);
-      return () => clearInterval(interval);
-    }
-  }, [status]);
-
-  // Mirror the playback position into state (throttled) so the transport's
-  // left time updates without re-rendering every animation frame.
-  useEffect(() => {
-    if (status === "playing" && !isPaused) {
-      const interval = setInterval(() => {
-        const audio = audioElRef.current;
-        if (audio) setPlaybackMs(audio.currentTime * 1000);
-      }, 100);
-      return () => clearInterval(interval);
-    }
-  }, [status, isPaused]);
 
   useEffect(() => {
     if (view !== "recordings" && !isDesktop) return;
@@ -518,7 +321,7 @@ function App() {
             </div>
           </div>
 
-          <PitchGraph ref={pitchGraphRef} historyRef={historyRef}>
+          <PitchGraph ref={pitchGraphRef} historyRef={engine.getHistoryRef()}>
             {status === "idle" && !selectedRecording && (
               <button className="graph-overlay" onClick={startMonitor}>
                 <svg viewBox="0 0 100 100" className="graph-overlay-icon">
@@ -535,7 +338,7 @@ function App() {
             playbackMs={playbackMs}
             totalMs={totalMs}
             waveformPeaks={waveformPeaks}
-            playheadRef={playheadRef}
+            playheadRef={engine.getPlayheadRef()}
             liveWaveformRef={liveWaveformRef}
             playbackWaveformRef={playbackWaveformRef}
             selectedRecording={selectedRecording}
