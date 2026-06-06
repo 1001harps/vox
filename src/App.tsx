@@ -4,6 +4,7 @@ import {
   type RecordingData,
   type RecordingStorage,
 } from "./storage";
+import type { HistoryBuffer, Recording, Status, View } from "./types";
 
 const NOTE_NAMES = [
   "C",
@@ -114,7 +115,6 @@ const WINDOW_MS = 6000;
 
 // One pitch reading over time. `midi` is NaN for frames with no detected pitch,
 // which breaks the contour into separate phrases.
-type Sample = { t: number; midi: number };
 
 // Continuous MIDI number for a frequency (float, for smooth dot placement).
 function freqToMidi(freq: number): number {
@@ -128,18 +128,10 @@ function isBlackKey(midi: number): boolean {
 
 // idle = nothing running, monitoring = live graph only, recording = monitor +
 // capture, playing = playing back a recorded clip.
-type Status = "idle" | "monitoring" | "recording" | "playing";
 
 // A saved take. In-memory representation with object URL for playback.
-type Recording = {
-  id: string;
-  createdAt: number; // ms epoch, captured when recording started
-  durationMs: number;
-  url: string; // object URL for the captured blob
-};
 
 // Which screen is showing.
-type View = "practice" | "recordings" | "progress";
 
 const storage: RecordingStorage = new IndexedDBStorage();
 
@@ -308,7 +300,6 @@ function App() {
   const graphRef = useRef<HTMLDivElement | null>(null);
   const pitchDisplayRef = useRef<HTMLSpanElement | null>(null);
   const gridCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  type HistoryBuffer = { samples: Sample[]; start: number };
   const historyRef = useRef<HistoryBuffer>({ samples: [], start: 0 });
 
   // Recording capture + playback element.
