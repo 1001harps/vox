@@ -204,6 +204,29 @@ body {
   height: 28px;
 }
 
+.transport-download-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px;
+  border: none;
+  border-radius: 50%;
+  background: none;
+  cursor: pointer;
+  color: #888;
+  text-decoration: none;
+  flex: 0 0 auto;
+}
+
+.transport-download-btn:active {
+  background: #f2f2f2;
+}
+
+.transport-download-btn svg {
+  width: 18px;
+  height: 18px;
+}
+
 .rec-meta {
   display: inline-flex;
   align-items: center;

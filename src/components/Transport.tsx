@@ -152,6 +152,28 @@ export function Transport({
             ? ""
             : formatDuration(totalMs)}
         </span>
+
+        {(transportState === "loaded" || transportState === "playing" || transportState === "paused") && selectedRecording && (
+          <a
+            className="transport-download-btn"
+            href={selectedRecording.url}
+            download={`vox-${selectedRecording.createdAt}.webm`}
+            aria-label="Download recording"
+          >
+            <svg
+              viewBox="0 0 20 20"
+              width="18"
+              height="18"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M10 3v10M6 9l4 4 4-4M4 15h12" />
+            </svg>
+          </a>
+        )}
       </div>
     </div>
   );
