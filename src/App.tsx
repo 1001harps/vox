@@ -12,16 +12,9 @@ import {
 } from "./utils/format";
 import { computeProgressStats } from "./utils/progress";
 import { computeWaveformPeaks } from "./utils/waveform";
-import {
-  isBlackKey,
-  LANES,
-  MAX_MIDI,
-  MIN_MIDI,
-  NOTE_NAMES,
-  noteFromPitch,
-  WINDOW_MS,
-} from "./audio/pitch";
 import { startAnalysis } from "./audio/analysis";
+import { PitchGraph, type PitchGraphHandle } from "./components/PitchGraph";
+import { LiveWaveform, PlaybackWaveform, type LiveWaveformHandle, type PlaybackWaveformHandle } from "./components/Waveform";
 
 // idle = nothing running, monitoring = live graph only, recording = monitor +
 // capture, playing = playing back a recorded clip.
@@ -84,221 +77,26 @@ function App() {
 
   const audioContextRef = useRef<AudioContext | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const graphRef = useRef<HTMLDivElement | null>(null);
   const pitchDisplayRef = useRef<HTMLSpanElement | null>(null);
-  const gridCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const historyRef = useRef<HistoryBuffer>({ samples: [], start: 0 });
 
   // Recording capture + playback element.
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioElRef = useRef<HTMLAudioElement | null>(null);
   const recordStartRef = useRef<number>(0); // ms epoch when capture started
-  const liveWaveformCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  // Amplitude peaks accumulated over the current take, so the live waveform can
-  // show the whole recording so far (Voice-Memos style) instead of a zoomed-in
-  // snapshot of the latest buffer.
-  const recordingWaveRef = useRef<number[]>([]);
   const analyserRef = useRef<AnalyserNode | null>(null);
-  const waveformCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const peaksRef = useRef<Float32Array | null>(null);
   const playheadRef = useRef<number>(0);
   const waveformRafRef = useRef<number | null>(null);
-  const isDraggingRef = useRef<boolean>(false);
-  const hasDraggedRef = useRef<boolean>(false);
   const [recordingPeaks, setRecordingPeaks] = useState<
     Map<string, Float32Array>
   >(new Map());
   const computedPeaksRef = useRef<Set<string>>(new Set());
 
-  // Match the canvas backing store to its CSS size (and DPR) so it stays crisp.
-  const drawGridToCache = useCallback((width: number, height: number) => {
-    if (width <= 0 || height <= 0) return;
-    let grid = gridCanvasRef.current;
-    if (!grid) {
-      grid = document.createElement("canvas");
-      gridCanvasRef.current = grid;
-    }
-    const dpr = window.devicePixelRatio || 1;
-    grid.width = width * dpr;
-    grid.height = height * dpr;
-    const ctx = grid.getContext("2d");
-    if (!ctx) return;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-
-    const laneH = height / LANES;
-
-    ctx.fillStyle = "#fff";
-    ctx.fillRect(0, 0, width, height);
-
-    ctx.textBaseline = "middle";
-    for (let midi = MIN_MIDI; midi <= MAX_MIDI; midi++) {
-      const top = (MAX_MIDI - midi) * laneH;
-      const mid = top + laneH / 2;
-
-      if (isBlackKey(midi)) {
-        ctx.fillStyle = "#f2f2f2";
-        ctx.fillRect(0, top, width, laneH);
-      }
-      ctx.strokeStyle = "#ececec";
-      ctx.beginPath();
-      ctx.moveTo(0, top);
-      ctx.lineTo(width, top);
-      ctx.stroke();
-
-      if (!isBlackKey(midi)) {
-        const name = NOTE_NAMES[((midi % 12) + 12) % 12];
-        const isC = midi % 12 === 0;
-        ctx.fillStyle = isC ? "#555" : "#aaa";
-        ctx.font = `${isC ? 600 : 400} 11px system-ui, sans-serif`;
-        ctx.fillText(`${name}${Math.floor(midi / 12) - 1}`, 6, mid);
-      }
-    }
-
-    ctx.strokeStyle = "#ddd";
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(width / 2, 0);
-    ctx.lineTo(width / 2, height);
-    ctx.stroke();
-  }, []);
-
-  const sizeCanvas = useCallback(() => {
-    const canvas = canvasRef.current;
-    const container = graphRef.current;
-    if (!canvas || !container) return;
-    const dpr = window.devicePixelRatio || 1;
-    canvas.width = container.clientWidth * dpr;
-    canvas.height = container.clientHeight * dpr;
-    canvas.getContext("2d")?.setTransform(dpr, 0, 0, dpr, 0, 0);
-    drawGridToCache(container.clientWidth, container.clientHeight);
-  }, [drawGridToCache]);
-
-  const sizeLiveWaveformCanvas = useCallback(() => {
-    const canvas = liveWaveformCanvasRef.current;
-    if (!canvas) return;
-    const dpr = window.devicePixelRatio || 1;
-    canvas.width = canvas.clientWidth * dpr;
-    canvas.height = canvas.clientHeight * dpr;
-    canvas.getContext("2d")?.setTransform(dpr, 0, 0, dpr, 0, 0);
-  }, []);
-
-  // Draw the piano-roll grid and the buffered pitch history scrolling across
-  // time (now at the right edge, older readings trailing left). Imperative +
-  // called every frame, so it never triggers a React re-render.
-  const renderGraph = useCallback(() => {
-    const canvas = canvasRef.current;
-    const ctx = canvas?.getContext("2d");
-    if (!canvas || !ctx) return;
-
-    const dpr = window.devicePixelRatio || 1;
-    const width = canvas.width / dpr;
-    const height = canvas.height / dpr;
-    const laneH = height / LANES;
-    const midiToY = (midi: number) => (MAX_MIDI - midi + 0.5) * laneH;
-    const now = performance.now();
-    const timeToX = (t: number) => (width / 2) * (1 - (now - t) / WINDOW_MS);
-
-    const grid = gridCanvasRef.current;
-    if (grid && grid.width > 0 && grid.height > 0) {
-      ctx.save();
-      ctx.setTransform(1, 0, 0, 1, 0, 0);
-      ctx.drawImage(grid, 0, 0);
-      ctx.restore();
-    }
-
-    const history = historyRef.current;
-    ctx.strokeStyle = "#333";
-    ctx.lineWidth = 2;
-    ctx.lineJoin = "round";
-    ctx.beginPath();
-    let penDown = false;
-    for (let i = history.start; i < history.samples.length; i++) {
-      const s = history.samples[i];
-      if (Number.isNaN(s.midi)) {
-        penDown = false;
-        continue;
-      }
-      const x = timeToX(s.t);
-      const y = midiToY(Math.min(MAX_MIDI, Math.max(MIN_MIDI, s.midi)));
-      if (penDown) ctx.lineTo(x, y);
-      else ctx.moveTo(x, y);
-      penDown = true;
-    }
-    ctx.stroke();
-
-    const lastIdx = history.samples.length - 1;
-    const last = lastIdx >= history.start ? history.samples[lastIdx] : undefined;
-    if (last && !Number.isNaN(last.midi)) {
-      const freq = 440 * Math.pow(2, (last.midi - 69) / 12);
-      const inTune = Math.abs(noteFromPitch(freq).cents) <= 5;
-      const midi = Math.min(MAX_MIDI, Math.max(MIN_MIDI, last.midi));
-      ctx.fillStyle = inTune ? "#2e9e4f" : "#111";
-      ctx.beginPath();
-      ctx.arc(timeToX(last.t), midiToY(midi), 6, 0, Math.PI * 2);
-      ctx.fill();
-    }
-  }, []);
-
-  const renderWaveform = useCallback(() => {
-    const canvas = waveformCanvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    const dpr = window.devicePixelRatio || 1;
-    const width = canvas.width / dpr;
-    const height = canvas.height / dpr;
-    ctx.clearRect(0, 0, width, height);
-    const peaks = peaksRef.current;
-    if (!peaks || peaks.length === 0) return;
-    const barWidth = width / peaks.length;
-    const midY = height / 2;
-    const progress = playheadRef.current;
-    for (let i = 0; i < peaks.length; i++) {
-      const barHeight = peaks[i] * height;
-      const x = i * barWidth;
-      ctx.fillStyle = i / peaks.length <= progress ? "#333" : "#ccc";
-      ctx.fillRect(x, midY - barHeight / 2, barWidth - 1, barHeight);
-    }
-  }, []);
-
-  // Size + draw the grid on mount, and re-fit on resize / orientation change.
-  useEffect(() => {
-    sizeCanvas();
-    renderGraph();
-    const container = graphRef.current;
-    if (!container) return;
-    const ro = new ResizeObserver(() => {
-      sizeCanvas();
-      renderGraph();
-    });
-    ro.observe(container);
-    return () => ro.disconnect();
-  }, [sizeCanvas, renderGraph]);
-
-  // Re-runs when `status` changes so the canvas gets sized when it mounts on
-  // record start (it's only rendered while recording, so a mount-only effect
-  // would size it before it exists).
-  useEffect(() => {
-    sizeLiveWaveformCanvas();
-    const canvas = liveWaveformCanvasRef.current;
-    if (!canvas) return;
-    const ro = new ResizeObserver(() => {
-      sizeLiveWaveformCanvas();
-    });
-    ro.observe(canvas);
-    return () => ro.disconnect();
-  }, [sizeLiveWaveformCanvas, status]);
-
-  useEffect(() => {
-    const canvas = waveformCanvasRef.current;
-    if (!canvas) return;
-    const dpr = window.devicePixelRatio || 1;
-    canvas.width = canvas.clientWidth * dpr;
-    canvas.height = canvas.clientHeight * dpr;
-    canvas.getContext("2d")?.setTransform(dpr, 0, 0, dpr, 0, 0);
-    renderWaveform();
-  }, [renderWaveform, waveformPeaks]);
+  // Component handles for imperative canvas rendering
+  const pitchGraphRef = useRef<PitchGraphHandle>(null);
+  const liveWaveformRef = useRef<LiveWaveformHandle>(null);
+  const playbackWaveformRef = useRef<PlaybackWaveformHandle>(null);
 
   async function selectRecording(rec: Recording) {
     setSelectedRecording(rec);
@@ -309,42 +107,11 @@ function App() {
     setPlaybackMs(0);
   }
 
-  function seekToPosition(clientX: number) {
-    const canvas = waveformCanvasRef.current;
-    if (!canvas || !audioElRef.current || !selectedRecording) return;
-    const rect = canvas.getBoundingClientRect();
-    const x = clientX - rect.left;
-    const progress = Math.max(0, Math.min(1, x / rect.width));
+  function handleWaveformSeek(progress: number) {
+    if (!audioElRef.current || !selectedRecording) return;
     audioElRef.current.currentTime = progress * audioElRef.current.duration;
     playheadRef.current = progress;
-    renderWaveform();
-  }
-
-  function handleWaveformPointerDown(e: React.MouseEvent | React.TouchEvent) {
-    isDraggingRef.current = true;
-    hasDraggedRef.current = false;
-    const clientX = "touches" in e ? e.touches[0].clientX : e.clientX;
-    seekToPosition(clientX);
-  }
-
-  function handleWaveformPointerMove(e: React.MouseEvent | React.TouchEvent) {
-    if (!isDraggingRef.current) return;
-    hasDraggedRef.current = true;
-    const clientX = "touches" in e ? e.touches[0].clientX : e.clientX;
-    seekToPosition(clientX);
-  }
-
-  function handleWaveformPointerUp() {
-    isDraggingRef.current = false;
-  }
-
-  function handleWaveformClick(e: React.MouseEvent) {
-    if (hasDraggedRef.current) {
-      e.preventDefault();
-      hasDraggedRef.current = false;
-      return;
-    }
-    seekToPosition(e.clientX);
+    playbackWaveformRef.current?.render();
   }
 
   async function loadRecordings() {
@@ -366,54 +133,6 @@ function App() {
 
   const stopAnalysisRef = useRef<(() => void) | null>(null);
 
-  // Draw the live recording waveform: accumulate one amplitude peak per frame
-  // and draw the whole take as bars. While it fits, bars grow left -> right
-  // (the waveform "expands" as you record); once it fills the strip, the bars
-  // downsample to keep the entire take visible (Voice-Memos style).
-  const drawLiveWaveform = useCallback((_timeData: Float32Array, peak: number) => {
-    const lwCanvas = liveWaveformCanvasRef.current;
-    if (!lwCanvas) return;
-    const lwCtx = lwCanvas.getContext("2d");
-    if (!lwCtx) return;
-    const dpr = window.devicePixelRatio || 1;
-    const lwWidth = lwCanvas.width / dpr;
-    const lwHeight = lwCanvas.height / dpr;
-
-    const wave = recordingWaveRef.current;
-    wave.push(peak);
-
-    lwCtx.clearRect(0, 0, lwWidth, lwHeight);
-    lwCtx.fillStyle = "#555";
-
-    const slot = 3; // px per bar (bar + gap)
-    const barW = 2;
-    const maxBars = Math.max(1, Math.floor(lwWidth / slot));
-
-    // Fit the whole take into the strip: take the max of each group once
-    // there are more samples than bar slots.
-    let bars: number[];
-    if (wave.length <= maxBars) {
-      bars = wave;
-    } else {
-      bars = new Array(maxBars);
-      for (let i = 0; i < maxBars; i++) {
-        const start = Math.floor((i * wave.length) / maxBars);
-        const end = Math.floor(((i + 1) * wave.length) / maxBars);
-        let m = 0;
-        for (let j = start; j < end; j++) {
-          if (wave[j] > m) m = wave[j];
-        }
-        bars[i] = m;
-      }
-    }
-
-    const midY = lwHeight / 2;
-    for (let i = 0; i < bars.length; i++) {
-      const h = Math.max(1, bars[i] * lwHeight);
-      lwCtx.fillRect(i * slot, midY - h / 2, barW, h);
-    }
-  }, []);
-
   // The detect-smooth-graph loop, run against any analyser node -- the live mic
   // while recording, or the recorded clip on playback. Identical pitch handling
   // either way, so playback is graphed exactly as if the mic were live.
@@ -421,7 +140,7 @@ function App() {
     (analyser: AnalyserNode, sampleRate: number) => {
       analyserRef.current = analyser;
       stopAnalysisRef.current = startAnalysis(analyser, sampleRate, historyRef, {
-        onRenderGraph: renderGraph,
+        onRenderGraph: () => pitchGraphRef.current?.render(),
         onPitchUpdate: (noteName, inTune) => {
           const pitchEl = pitchDisplayRef.current;
           if (pitchEl) {
@@ -436,10 +155,10 @@ function App() {
             pitchEl.style.color = "#111";
           }
         },
-        onFrame: drawLiveWaveform,
+        onFrame: (_timeData, peak) => liveWaveformRef.current?.drawFrame(peak),
       });
     },
-    [renderGraph, drawLiveWaveform],
+    [],
   );
 
   // Tear down the audio graph + RAF loop, shared by both record and playback.
@@ -500,7 +219,6 @@ function App() {
     const startedAt = Date.now();
     recordStartRef.current = startedAt;
     setElapsedMs(0);
-    recordingWaveRef.current = [];
     const chunks: Blob[] = [];
     recorder.ondataavailable = (e) => {
       if (e.data.size) chunks.push(e.data);
@@ -561,7 +279,7 @@ function App() {
     const updatePlayhead = () => {
       if (audio.duration && selectedRecording) {
         playheadRef.current = audio.currentTime / audio.duration;
-        renderWaveform();
+        playbackWaveformRef.current?.render();
       }
       if (!isPaused) {
         waveformRafRef.current = requestAnimationFrame(updatePlayhead);
@@ -592,7 +310,7 @@ function App() {
       const updatePlayhead = () => {
         if (audio.duration && selectedRecording) {
           playheadRef.current = audio.currentTime / audio.duration;
-          renderWaveform();
+          playbackWaveformRef.current?.render();
         }
         if (!isPaused) {
           waveformRafRef.current = requestAnimationFrame(updatePlayhead);
@@ -615,7 +333,7 @@ function App() {
     setIsPaused(false);
     playheadRef.current = 0;
     setPlaybackMs(0);
-    renderWaveform();
+    playbackWaveformRef.current?.render();
   }
 
   // Dismiss the loaded take and return to live mic monitoring.
@@ -912,8 +630,7 @@ function App() {
             </div>
           </div>
 
-          <div className="pitch-graph-container" ref={graphRef}>
-            <canvas ref={canvasRef} />
+          <PitchGraph ref={pitchGraphRef} historyRef={historyRef}>
             {status === "idle" && !selectedRecording && (
               <button className="graph-overlay" onClick={startMonitor}>
                 <svg viewBox="0 0 100 100" className="graph-overlay-icon">
@@ -921,29 +638,22 @@ function App() {
                 </svg>
               </button>
             )}
-          </div>
+          </PitchGraph>
 
           <div className="transport">
             <div className="transport-waveform">
               {transportState === "idle"
                 ? <div className="wf-flat" />
                 : transportState === "recording"
-                ? <canvas ref={liveWaveformCanvasRef} className="transport-live-waveform" />
+                ? <LiveWaveform ref={liveWaveformRef} />
                 : (
                   <>
-                    <button
-                      className="transport-waveform-btn"
-                      onClick={handleWaveformClick}
-                      onMouseDown={handleWaveformPointerDown}
-                      onMouseMove={handleWaveformPointerMove}
-                      onMouseUp={handleWaveformPointerUp}
-                      onMouseLeave={handleWaveformPointerUp}
-                      onTouchStart={handleWaveformPointerDown}
-                      onTouchMove={handleWaveformPointerMove}
-                      onTouchEnd={handleWaveformPointerUp}
-                    >
-                      <canvas ref={waveformCanvasRef} />
-                    </button>
+                    <PlaybackWaveform
+                      ref={playbackWaveformRef}
+                      peaks={waveformPeaks}
+                      playheadRef={playheadRef}
+                      onSeek={handleWaveformSeek}
+                    />
                     <button
                       className="transport-close-btn"
                       onClick={closeRecording}
