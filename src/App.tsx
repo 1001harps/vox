@@ -5,6 +5,13 @@ import {
   type RecordingStorage,
 } from "./storage";
 import type { HistoryBuffer, Recording, Status, View } from "./types";
+import {
+  formatDuration,
+  formatTime,
+  groupRecordingsByDate,
+} from "./utils/format";
+import { computeProgressStats } from "./utils/progress";
+import { computeWaveformPeaks } from "./utils/waveform";
 
 const NOTE_NAMES = [
   "C",
@@ -134,114 +141,6 @@ function isBlackKey(midi: number): boolean {
 // Which screen is showing.
 
 const storage: RecordingStorage = new IndexedDBStorage();
-
-function formatDuration(ms: number): string {
-  const total = Math.round(ms / 1000);
-  const m = Math.floor(total / 60);
-  const s = total % 60;
-  return `${m}:${s.toString().padStart(2, "0")}`;
-}
-
-function formatTime(ms: number): string {
-  const d = new Date(ms);
-  return `${d.getHours().toString().padStart(2, "0")}:${
-    d.getMinutes().toString().padStart(2, "0")
-  }`;
-}
-
-const WAVEFORM_BARS = 200;
-
-async function computeWaveformPeaks(url: string): Promise<Float32Array> {
-  const response = await fetch(url);
-  const arrayBuffer = await response.arrayBuffer();
-  const audioContext = new OfflineAudioContext(1, 1, 44100);
-  const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
-  const channelData = audioBuffer.getChannelData(0);
-  const samplesPerBar = Math.floor(channelData.length / WAVEFORM_BARS);
-  const peaks = new Float32Array(WAVEFORM_BARS);
-  for (let bar = 0; bar < WAVEFORM_BARS; bar++) {
-    let max = 0;
-    const start = bar * samplesPerBar;
-    const end = Math.min(start + samplesPerBar, channelData.length);
-    for (let i = start; i < end; i++) {
-      const abs = Math.abs(channelData[i]);
-      if (abs > max) max = abs;
-    }
-    peaks[bar] = max;
-  }
-  return peaks;
-}
-
-function getStartOfDay(ms: number): number {
-  const d = new Date(ms);
-  d.setHours(0, 0, 0, 0);
-  return d.getTime();
-}
-
-function groupRecordingsByDate(
-  recordings: Recording[],
-): { label: string; recordings: Recording[] }[] {
-  const now = Date.now();
-  const todayStart = getStartOfDay(now);
-  const yesterdayStart = todayStart - 24 * 60 * 60 * 1000;
-  const groups: Map<string, Recording[]> = new Map();
-
-  for (const rec of recordings) {
-    const recDay = getStartOfDay(rec.createdAt);
-    let label: string;
-    if (recDay === todayStart) label = "Today";
-    else if (recDay === yesterdayStart) label = "Yesterday";
-    else {
-      const d = new Date(rec.createdAt);
-      label = d.toLocaleDateString(undefined, {
-        month: "short",
-        day: "numeric",
-      });
-    }
-    if (!groups.has(label)) groups.set(label, []);
-    groups.get(label)!.push(rec);
-  }
-
-  return Array.from(groups, ([label, recs]) => ({ label, recordings: recs }));
-}
-
-function computeProgressStats(recordings: Recording[]) {
-  const now = Date.now();
-  const weekAgo = now - 7 * 24 * 60 * 60 * 1000;
-  const todayStart = getStartOfDay(now);
-
-  let sessionsThisWeek = 0;
-  const recordingDays = new Set<number>();
-  const dailyCounts = new Map<number, number>();
-
-  for (const r of recordings) {
-    if (r.createdAt >= weekAgo) sessionsThisWeek++;
-    const dayStart = getStartOfDay(r.createdAt);
-    recordingDays.add(dayStart);
-    dailyCounts.set(dayStart, (dailyCounts.get(dayStart) || 0) + 1);
-  }
-
-  let streak = 0;
-  let day = todayStart;
-  if (!recordingDays.has(day)) {
-    day -= 24 * 60 * 60 * 1000;
-  }
-  while (recordingDays.has(day)) {
-    streak++;
-    day -= 24 * 60 * 60 * 1000;
-  }
-
-  const dailySessions: { label: string; count: number }[] = [];
-  for (let i = 13; i >= 0; i--) {
-    const dayStart = getStartOfDay(now - i * 24 * 60 * 60 * 1000);
-    let label = "";
-    if (i === 0) label = "today";
-    else if (i === 13) label = "2 wks ago";
-    dailySessions.push({ label, count: dailyCounts.get(dayStart) || 0 });
-  }
-
-  return { sessionsThisWeek, streak, dailySessions };
-}
 
 // Transport control glyphs. Deliberately unambiguous and mutually exclusive:
 // ring+dot = record, square = stop, triangle = play, two bars = pause.
