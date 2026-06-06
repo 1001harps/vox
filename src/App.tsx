@@ -4,6 +4,11 @@ const NOTE_NAMES = [
   'C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B',
 ]
 
+// Lenient periodicity check: reject only clearly aperiodic frames (broadband
+// noise, transients). Kept low on purpose so it works across all mics and the
+// full vocal range -- voice is the priority, not perfect noise rejection.
+const CLARITY_THRESHOLD = 0.5
+
 // Autocorrelation pitch detection (after Chris Wilson's PitchDetect).
 // Returns the fundamental frequency in Hz, or -1 if no clear pitch.
 function detectPitch(buf: Float32Array, sampleRate: number): number {
@@ -43,7 +48,11 @@ function detectPitch(buf: Float32Array, sampleRate: number): number {
   for (let lag = d; lag < n; lag++) {
     if (c[lag] > maxVal) { maxVal = c[lag]; maxLag = lag }
   }
-  if (maxLag <= 0) return -1
+  if (maxLag <= 0 || maxLag >= n - 1) return -1
+
+  // Clarity = peak correlation relative to zero-lag energy (c[0]). Periodic
+  // tones approach 1; noise/transients stay low. Reject anything too low.
+  if (maxVal / c[0] < CLARITY_THRESHOLD) return -1
 
   // Parabolic interpolation around the peak for sub-sample accuracy.
   let t0 = maxLag
@@ -72,6 +81,13 @@ const MIN_MIDI = 40
 const MAX_MIDI = 84
 const LANES = MAX_MIDI - MIN_MIDI + 1
 
+// How many seconds of pitch history the X axis spans (now at the right edge).
+const WINDOW_MS = 6000
+
+// One pitch reading over time. `midi` is NaN for frames with no detected pitch,
+// which breaks the contour into separate phrases.
+type Sample = { t: number; midi: number }
+
 // Continuous MIDI number for a frequency (float, for smooth dot placement).
 function freqToMidi(freq: number): number {
   return 69 + 12 * Math.log2(freq / 440)
@@ -93,6 +109,7 @@ function App() {
   const rafRef = useRef<number | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const graphRef = useRef<HTMLDivElement | null>(null)
+  const historyRef = useRef<Sample[]>([])
 
   // Match the canvas backing store to its CSS size (and DPR) so it stays crisp.
   const sizeCanvas = useCallback(() => {
@@ -106,9 +123,10 @@ function App() {
     canvas.getContext('2d')?.setTransform(dpr, 0, 0, dpr, 0, 0)
   }, [])
 
-  // Draw the piano-roll grid plus a dot at the current pitch (pitchHz <= 0 = none).
-  // Imperative + called every frame, so the dot never triggers a React re-render.
-  const renderGraph = useCallback((pitchHz: number) => {
+  // Draw the piano-roll grid and the buffered pitch history scrolling across
+  // time (now at the right edge, older readings trailing left). Imperative +
+  // called every frame, so it never triggers a React re-render.
+  const renderGraph = useCallback(() => {
     const canvas = canvasRef.current
     const ctx = canvas?.getContext('2d')
     if (!canvas || !ctx) return
@@ -119,9 +137,16 @@ function App() {
     const laneH = height / LANES
     // Center of the lane for a (possibly fractional) MIDI value.
     const midiToY = (midi: number) => (MAX_MIDI - midi + 0.5) * laneH
+    // Map a timestamp to X: now -> center, now - WINDOW_MS -> left edge.
+    // The right half is "future" (empty) so the contour reads like a playhead.
+    const now = performance.now()
+    const timeToX = (t: number) => (width / 2) * (1 - (now - t) / WINDOW_MS)
 
-    ctx.clearRect(0, 0, width, height)
+    // Opaque white background so saved PNGs aren't transparent.
+    ctx.fillStyle = '#fff'
+    ctx.fillRect(0, 0, width, height)
 
+    // --- Piano-roll grid ---
     ctx.textBaseline = 'middle'
     for (let midi = MIN_MIDI; midi <= MAX_MIDI; midi++) {
       const top = (MAX_MIDI - midi) * laneH
@@ -147,25 +172,56 @@ function App() {
       }
     }
 
-    if (pitchHz > 0) {
-      const midi = Math.min(MAX_MIDI, Math.max(MIN_MIDI, freqToMidi(pitchHz)))
-      const inTune = Math.abs(noteFromPitch(pitchHz).cents) <= 5
+    // Faint "now" playhead down the center.
+    ctx.strokeStyle = '#ddd'
+    ctx.lineWidth = 1
+    ctx.beginPath()
+    ctx.moveTo(width / 2, 0)
+    ctx.lineTo(width / 2, height)
+    ctx.stroke()
+
+    // --- Pitch contour: connect samples, breaking the line on NaN (silence) ---
+    const history = historyRef.current
+    ctx.strokeStyle = '#333'
+    ctx.lineWidth = 2
+    ctx.lineJoin = 'round'
+    ctx.beginPath()
+    let penDown = false
+    for (const s of history) {
+      if (Number.isNaN(s.midi)) {
+        penDown = false
+        continue
+      }
+      const x = timeToX(s.t)
+      const y = midiToY(Math.min(MAX_MIDI, Math.max(MIN_MIDI, s.midi)))
+      if (penDown) ctx.lineTo(x, y)
+      else ctx.moveTo(x, y)
+      penDown = true
+    }
+    ctx.stroke()
+
+    // --- Head dot: the most recent reading, colored by how in-tune it is ---
+    const last = history[history.length - 1]
+    if (last && !Number.isNaN(last.midi)) {
+      const freq = 440 * Math.pow(2, (last.midi - 69) / 12)
+      const inTune = Math.abs(noteFromPitch(freq).cents) <= 5
+      const midi = Math.min(MAX_MIDI, Math.max(MIN_MIDI, last.midi))
       ctx.fillStyle = inTune ? '#2e9e4f' : '#111'
       ctx.beginPath()
-      ctx.arc(width / 2, midiToY(midi), 7, 0, Math.PI * 2)
+      ctx.arc(timeToX(last.t), midiToY(midi), 6, 0, Math.PI * 2)
       ctx.fill()
     }
   }, [])
 
-  // Size + draw the empty grid on mount, and re-fit on resize / orientation change.
+  // Size + draw the grid on mount, and re-fit on resize / orientation change.
   useEffect(() => {
     sizeCanvas()
-    renderGraph(-1)
+    renderGraph()
     const container = graphRef.current
     if (!container) return
     const ro = new ResizeObserver(() => {
       sizeCanvas()
-      renderGraph(-1)
+      renderGraph()
     })
     ro.observe(container)
     return () => ro.disconnect()
@@ -200,13 +256,32 @@ function App() {
     const timeData = new Float32Array(analyser.fftSize)
     const sampleRate = audioContext.sampleRate
 
-    // Stabilize the reading: smooth within a note, snap on note changes, and
-    // hold the last note briefly after the sound fades (like a real tuner).
-    const SMOOTHING = 0.2 // 0 = frozen, 1 = no smoothing
-    const SNAP_CENTS = 60 // jumps bigger than this are treated as a new note
+    // Stabilize the reading: gate quiet noise, median-filter jitter, require big
+    // jumps to persist before committing (octave-distance jumps -- the most
+    // likely detection error -- need much longer), then ease the displayed pitch
+    // toward the committed note so transitions ramp instead of jumping squarely.
+    const NOISE_GATE = 0.015 // RMS below this counts as silence
+    const MEDIAN_WINDOW = 3 // median of recent raw readings smooths jitter
+    const SNAP_CENTS = 60 // within this, readings are treated as the same note
+    const CONFIRM_FRAMES = 3 // a normal jump must persist this long to commit
+    const OCTAVE_CONFIRM_FRAMES = 9 // octave jumps must persist much longer
+    const DISPLAY_EASE = 0.25 // how fast the displayed pitch eases to the target
     const HOLD_MS = 750 // keep showing the last note this long after silence
-    let smoothed = -1
+
+    // True when `a` is within ~1 semitone of an octave (or two) away from `b` --
+    // i.e. the gap looks like an octave-doubling/halving error, not a real leap.
+    const nearOctave = (a: number, b: number) => {
+      const c = Math.abs(1200 * Math.log2(a / b))
+      return Math.abs(c - 1200) < 100 || Math.abs(c - 2400) < 100
+    }
+
+    let smoothed = -1 // displayed pitch (eases toward target)
+    let target = -1 // the note we currently believe is being sung
     let lastGoodTime = 0
+    let recentRaw: number[] = []
+    let candidate = -1 // a pending note-change waiting to be confirmed
+    let candidateFrames = 0
+    historyRef.current = []
 
     const tick = () => {
       analyser.getFloatTimeDomainData(timeData)
@@ -215,28 +290,76 @@ function App() {
       for (let i = 0; i < timeData.length; i++) {
         sum += timeData[i] * timeData[i]
       }
-      setVolume(Math.sqrt(sum / timeData.length))
+      const volume = Math.sqrt(sum / timeData.length)
+      setVolume(volume)
 
-      const raw = detectPitch(timeData, sampleRate)
+      // Noise gate: ignore detections when the signal is too quiet to be a note.
+      const raw = volume >= NOISE_GATE ? detectPitch(timeData, sampleRate) : -1
       const now = performance.now()
 
       if (raw > 0) {
-        const jumpCents =
-          smoothed > 0 ? Math.abs(1200 * Math.log2(raw / smoothed)) : Infinity
-        if (jumpCents > SNAP_CENTS) {
-          smoothed = raw // new note (or first reading): jump straight to it
+        // Median-filter the raw readings to smooth frame-to-frame jitter.
+        recentRaw.push(raw)
+        if (recentRaw.length > MEDIAN_WINDOW) recentRaw.shift()
+        const sorted = [...recentRaw].sort((a, b) => a - b)
+        const value = sorted[Math.floor(sorted.length / 2)]
+
+        const cents = (a: number, b: number) => Math.abs(1200 * Math.log2(a / b))
+
+        if (target < 0) {
+          target = value // first note after silence: lock on immediately
+          smoothed = value
+          candidate = -1
+          candidateFrames = 0
+        } else if (cents(value, target) <= SNAP_CENTS) {
+          target = value // same note: follow the voice (drift, vibrato)
+          candidate = -1
+          candidateFrames = 0
         } else {
-          smoothed += SMOOTHING * (raw - smoothed) // same note: ease toward it
+          // Big jump: a real note change or (more often) an octave error. Only
+          // commit once it persists; octave-distance jumps must persist longer.
+          const need = nearOctave(value, target)
+            ? OCTAVE_CONFIRM_FRAMES
+            : CONFIRM_FRAMES
+          if (candidate > 0 && cents(value, candidate) <= SNAP_CENTS) {
+            candidateFrames++
+          } else {
+            candidate = value
+            candidateFrames = 1
+          }
+          if (candidateFrames >= need) {
+            target = candidate
+            candidate = -1
+            candidateFrames = 0
+          }
         }
+
+        // Ease the displayed pitch toward the target in log space, so any
+        // transition ramps smoothly (like a voice) instead of a square jump.
+        smoothed *= Math.pow(target / smoothed, DISPLAY_EASE)
         lastGoodTime = now
         setPitch(smoothed)
-      } else if (now - lastGoodTime > HOLD_MS) {
-        smoothed = -1
-        setPitch(-1)
+      } else {
+        // Gap: reset filters so the next phrase starts clean.
+        recentRaw = []
+        candidate = -1
+        candidateFrames = 0
+        if (now - lastGoodTime > HOLD_MS) {
+          smoothed = -1
+          target = -1
+          setPitch(-1)
+        }
       }
 
-      // `smoothed` holds the last note during the hold window, then goes to -1.
-      renderGraph(smoothed)
+      // Append this frame to the history. Plot only frames that actually had a
+      // detection (raw > 0); silence pushes NaN so the contour ends immediately
+      // instead of trailing the held note across the hold window.
+      const history = historyRef.current
+      history.push({ t: now, midi: raw > 0 ? freqToMidi(smoothed) : NaN })
+      const cutoff = now - WINDOW_MS
+      while (history.length && history[0].t < cutoff) history.shift()
+
+      renderGraph()
       rafRef.current = requestAnimationFrame(tick)
     }
     tick()
@@ -255,7 +378,8 @@ function App() {
     setRunning(false)
     setVolume(0)
     setPitch(-1)
-    renderGraph(-1)
+    historyRef.current = []
+    renderGraph()
   }
 
   // Clean up on unmount.
@@ -300,18 +424,6 @@ function App() {
               >
                 {note ? note.name : '—'}
               </span>
-              {note && (
-                <span
-                  style={{ fontSize: 16, color: inTune ? '#2e9e4f' : '#c0392b' }}
-                >
-                  {note.cents > 0 ? `+${note.cents}` : note.cents}
-                </span>
-              )}
-              {note && (
-                <span style={{ fontSize: 14, color: '#888' }}>
-                  {pitch.toFixed(1)} Hz
-                </span>
-              )}
             </div>
           )
         })()}
