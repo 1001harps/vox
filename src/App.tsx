@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 const NOTE_NAMES = [
   'C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B',
@@ -67,6 +67,20 @@ function noteFromPitch(freq: number): { name: string; cents: number } {
   return { name: `${name}${octave}`, cents }
 }
 
+// Piano-roll vertical range: E2 (guitar low E) up to C6.
+const MIN_MIDI = 40
+const MAX_MIDI = 84
+const LANES = MAX_MIDI - MIN_MIDI + 1
+
+// Continuous MIDI number for a frequency (float, for smooth dot placement).
+function freqToMidi(freq: number): number {
+  return 69 + 12 * Math.log2(freq / 440)
+}
+
+function isBlackKey(midi: number): boolean {
+  return [1, 3, 6, 8, 10].includes(((midi % 12) + 12) % 12)
+}
+
 function App() {
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([])
   const [deviceId, setDeviceId] = useState<string>('')
@@ -77,6 +91,85 @@ function App() {
   const audioContextRef = useRef<AudioContext | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const rafRef = useRef<number | null>(null)
+  const canvasRef = useRef<HTMLCanvasElement | null>(null)
+  const graphRef = useRef<HTMLDivElement | null>(null)
+
+  // Match the canvas backing store to its CSS size (and DPR) so it stays crisp.
+  const sizeCanvas = useCallback(() => {
+    const canvas = canvasRef.current
+    const container = graphRef.current
+    if (!canvas || !container) return
+    const dpr = window.devicePixelRatio || 1
+    canvas.width = container.clientWidth * dpr
+    canvas.height = container.clientHeight * dpr
+    // Setting width/height resets the transform, so re-apply DPR scaling here.
+    canvas.getContext('2d')?.setTransform(dpr, 0, 0, dpr, 0, 0)
+  }, [])
+
+  // Draw the piano-roll grid plus a dot at the current pitch (pitchHz <= 0 = none).
+  // Imperative + called every frame, so the dot never triggers a React re-render.
+  const renderGraph = useCallback((pitchHz: number) => {
+    const canvas = canvasRef.current
+    const ctx = canvas?.getContext('2d')
+    if (!canvas || !ctx) return
+
+    const dpr = window.devicePixelRatio || 1
+    const width = canvas.width / dpr
+    const height = canvas.height / dpr
+    const laneH = height / LANES
+    // Center of the lane for a (possibly fractional) MIDI value.
+    const midiToY = (midi: number) => (MAX_MIDI - midi + 0.5) * laneH
+
+    ctx.clearRect(0, 0, width, height)
+
+    ctx.textBaseline = 'middle'
+    for (let midi = MIN_MIDI; midi <= MAX_MIDI; midi++) {
+      const top = (MAX_MIDI - midi) * laneH
+      const mid = top + laneH / 2
+
+      if (isBlackKey(midi)) {
+        ctx.fillStyle = '#f2f2f2'
+        ctx.fillRect(0, top, width, laneH)
+      }
+      ctx.strokeStyle = '#ececec'
+      ctx.beginPath()
+      ctx.moveTo(0, top)
+      ctx.lineTo(width, top)
+      ctx.stroke()
+
+      // Label natural notes only; make each C bolder for octave orientation.
+      if (!isBlackKey(midi)) {
+        const name = NOTE_NAMES[((midi % 12) + 12) % 12]
+        const isC = midi % 12 === 0
+        ctx.fillStyle = isC ? '#555' : '#aaa'
+        ctx.font = `${isC ? 600 : 400} 11px system-ui, sans-serif`
+        ctx.fillText(`${name}${Math.floor(midi / 12) - 1}`, 6, mid)
+      }
+    }
+
+    if (pitchHz > 0) {
+      const midi = Math.min(MAX_MIDI, Math.max(MIN_MIDI, freqToMidi(pitchHz)))
+      const inTune = Math.abs(noteFromPitch(pitchHz).cents) <= 5
+      ctx.fillStyle = inTune ? '#2e9e4f' : '#111'
+      ctx.beginPath()
+      ctx.arc(width / 2, midiToY(midi), 7, 0, Math.PI * 2)
+      ctx.fill()
+    }
+  }, [])
+
+  // Size + draw the empty grid on mount, and re-fit on resize / orientation change.
+  useEffect(() => {
+    sizeCanvas()
+    renderGraph(-1)
+    const container = graphRef.current
+    if (!container) return
+    const ro = new ResizeObserver(() => {
+      sizeCanvas()
+      renderGraph(-1)
+    })
+    ro.observe(container)
+    return () => ro.disconnect()
+  }, [sizeCanvas, renderGraph])
 
   // Populate the device list. Labels only appear once we have mic permission,
   // so refresh again after the stream starts.
@@ -142,6 +235,8 @@ function App() {
         setPitch(-1)
       }
 
+      // `smoothed` holds the last note during the hold window, then goes to -1.
+      renderGraph(smoothed)
       rafRef.current = requestAnimationFrame(tick)
     }
     tick()
@@ -160,121 +255,75 @@ function App() {
     setRunning(false)
     setVolume(0)
     setPitch(-1)
+    renderGraph(-1)
   }
 
   // Clean up on unmount.
   useEffect(() => stop, [])
 
   return (
-    <>
-    <nav
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        flexWrap: 'wrap',
-        gap: 12,
-        padding: '12px 16px',
-        borderBottom: '1px solid #ccc',
-        boxSizing: 'border-box',
-      }}
-    >
-      <select
-        value={deviceId}
-        onChange={(e) => setDeviceId(e.target.value)}
-        disabled={running}
-        style={{
-          fontSize: 16,
-          padding: 8,
-          flex: '1 1 180px',
-          minWidth: 0,
-          maxWidth: '100%',
-        }}
-      >
-        <option value="">Default input</option>
-        {devices.map((d) => (
-          <option key={d.deviceId} value={d.deviceId}>
-            {d.label || `Microphone ${d.deviceId.slice(0, 6)}`}
-          </option>
-        ))}
-      </select>
+    <div className="app">
+    <nav className="nav">
+      <div className="nav-controls">
+        <select
+          value={deviceId}
+          onChange={(e) => setDeviceId(e.target.value)}
+          disabled={running}
+        >
+          <option value="">Default input</option>
+          {devices.map((d) => (
+            <option key={d.deviceId} value={d.deviceId}>
+              {d.label || `Microphone ${d.deviceId.slice(0, 6)}`}
+            </option>
+          ))}
+        </select>
 
-      {running ? (
-        <button onClick={stop} style={{ fontSize: 16, padding: '8px 16px' }}>
-          Stop
-        </button>
-      ) : (
-        <button onClick={start} style={{ fontSize: 16, padding: '8px 16px' }}>
-          Start
-        </button>
-      )}
+        {running ? (
+          <button onClick={stop}>Stop</button>
+        ) : (
+          <button onClick={start}>Start</button>
+        )}
+      </div>
 
-      <div
-        style={{
-          marginLeft: 'auto',
-          fontSize: 28,
-          fontVariantNumeric: 'tabular-nums',
-          fontWeight: 700,
-        }}
-      >
-        {volume.toFixed(3)}
+      <div className="nav-readouts">
+        {(() => {
+          const note = pitch > 0 ? noteFromPitch(pitch) : null
+          const inTune = note ? Math.abs(note.cents) <= 5 : false
+          return (
+            <div className="nav-pitch">
+              <span
+                style={{
+                  fontSize: 28,
+                  fontWeight: 700,
+                  color: note ? (inTune ? '#2e9e4f' : '#111') : '#ccc',
+                }}
+              >
+                {note ? note.name : '—'}
+              </span>
+              {note && (
+                <span
+                  style={{ fontSize: 16, color: inTune ? '#2e9e4f' : '#c0392b' }}
+                >
+                  {note.cents > 0 ? `+${note.cents}` : note.cents}
+                </span>
+              )}
+              {note && (
+                <span style={{ fontSize: 14, color: '#888' }}>
+                  {pitch.toFixed(1)} Hz
+                </span>
+              )}
+            </div>
+          )
+        })()}
+
+        <div style={{ fontSize: 28, fontWeight: 700 }}>{volume.toFixed(3)}</div>
       </div>
     </nav>
 
-    <main
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        justifyContent: 'center',
-        minHeight: 'calc(100vh - 60px)',
-        gap: 8,
-      }}
-    >
-      {pitch > 0 ? (
-        (() => {
-          const { name, cents } = noteFromPitch(pitch)
-          const inTune = Math.abs(cents) <= 5
-          return (
-            <>
-              <div
-                style={{
-                  fontSize: 'clamp(80px, 28vw, 240px)',
-                  fontWeight: 700,
-                  lineHeight: 1,
-                  color: inTune ? '#2e9e4f' : '#111',
-                }}
-              >
-                {name}
-              </div>
-              <div
-                style={{
-                  fontSize: 24,
-                  fontVariantNumeric: 'tabular-nums',
-                  color: inTune ? '#2e9e4f' : '#c0392b',
-                }}
-              >
-                {cents > 0 ? `+${cents}` : cents} cents
-              </div>
-              <div style={{ fontSize: 18, color: '#888' }}>
-                {pitch.toFixed(1)} Hz
-              </div>
-            </>
-          )
-        })()
-      ) : (
-        <div
-          style={{
-            fontSize: 'clamp(80px, 28vw, 240px)',
-            fontWeight: 700,
-            lineHeight: 1,
-            color: '#ccc',
-          }}
-        >
-          —
-        </div>
-      )}
-    </main>
-    </>
+      <div className="graph" ref={graphRef}>
+        <canvas ref={canvasRef} />
+      </div>
+    </div>
   )
 }
 
