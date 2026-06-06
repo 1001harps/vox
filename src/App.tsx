@@ -101,13 +101,68 @@ function isBlackKey(midi: number): boolean {
 // capture, playing = playing back a recorded clip.
 type Status = 'idle' | 'monitoring' | 'recording' | 'playing'
 
+// A saved take. In-memory only for now -- lost on refresh.
+type Recording = {
+  id: string
+  createdAt: number // ms epoch, captured when recording started
+  durationMs: number
+  url: string // object URL for the captured blob
+}
+
+// Which screen is showing.
+type View = 'graph' | 'list'
+
+function formatTimestamp(ms: number): string {
+  return new Date(ms).toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  })
+}
+
+function formatDuration(ms: number): string {
+  const total = Math.round(ms / 1000)
+  const m = Math.floor(total / 60)
+  const s = total % 60
+  return `${m}:${s.toString().padStart(2, '0')}`
+}
+
+const WAVEFORM_BARS = 200
+
+async function computeWaveformPeaks(url: string): Promise<Float32Array> {
+  const response = await fetch(url)
+  const arrayBuffer = await response.arrayBuffer()
+  const audioContext = new OfflineAudioContext(1, 1, 44100)
+  const audioBuffer = await audioContext.decodeAudioData(arrayBuffer)
+  const channelData = audioBuffer.getChannelData(0)
+  const samplesPerBar = Math.floor(channelData.length / WAVEFORM_BARS)
+  const peaks = new Float32Array(WAVEFORM_BARS)
+  for (let bar = 0; bar < WAVEFORM_BARS; bar++) {
+    let max = 0
+    const start = bar * samplesPerBar
+    const end = Math.min(start + samplesPerBar, channelData.length)
+    for (let i = start; i < end; i++) {
+      const abs = Math.abs(channelData[i])
+      if (abs > max) max = abs
+    }
+    peaks[bar] = max
+  }
+  return peaks
+}
+
 function App() {
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([])
   const [deviceId, setDeviceId] = useState<string>('')
   const [status, setStatus] = useState<Status>('idle')
-  const [hasRecording, setHasRecording] = useState(false)
+  const [recordings, setRecordings] = useState<Recording[]>([])
+  const [view, setView] = useState<View>('graph')
   const [volume, setVolume] = useState(0)
   const [pitch, setPitch] = useState(-1)
+  const [hasInteracted, setHasInteracted] = useState(false)
+  const [selectedRecording, setSelectedRecording] = useState<Recording | null>(null)
+  const [waveformPeaks, setWaveformPeaks] = useState<Float32Array | null>(null)
+  const [isPaused, setIsPaused] = useState(false)
 
   const audioContextRef = useRef<AudioContext | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
@@ -116,10 +171,14 @@ function App() {
   const graphRef = useRef<HTMLDivElement | null>(null)
   const historyRef = useRef<Sample[]>([])
 
-  // Recording capture + the resulting playable clip.
+  // Recording capture + playback element.
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
   const audioElRef = useRef<HTMLAudioElement | null>(null)
-  const objectUrlRef = useRef<string | null>(null)
+  const recordStartRef = useRef<number>(0) // ms epoch when capture started
+  const waveformCanvasRef = useRef<HTMLCanvasElement | null>(null)
+  const peaksRef = useRef<Float32Array | null>(null)
+  const playheadRef = useRef<number>(0)
+  const waveformRafRef = useRef<number | null>(null)
 
   // Match the canvas backing store to its CSS size (and DPR) so it stays crisp.
   const sizeCanvas = useCallback(() => {
@@ -236,6 +295,46 @@ function App() {
     ro.observe(container)
     return () => ro.disconnect()
   }, [sizeCanvas, renderGraph])
+
+  const renderWaveform = useCallback(() => {
+    const canvas = waveformCanvasRef.current
+    if (!canvas) return
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
+    const dpr = window.devicePixelRatio || 1
+    const width = canvas.width / dpr
+    const height = canvas.height / dpr
+    ctx.clearRect(0, 0, width, height)
+    const peaks = peaksRef.current
+    if (!peaks || peaks.length === 0) return
+    const barWidth = width / peaks.length
+    const midY = height / 2
+    const progress = playheadRef.current
+    for (let i = 0; i < peaks.length; i++) {
+      const barHeight = peaks[i] * height
+      const x = i * barWidth
+      ctx.fillStyle = i / peaks.length <= progress ? '#333' : '#ccc'
+      ctx.fillRect(x, midY - barHeight / 2, barWidth - 1, barHeight)
+    }
+  }, [])
+
+  useEffect(() => {
+    const canvas = waveformCanvasRef.current
+    if (!canvas) return
+    const dpr = window.devicePixelRatio || 1
+    canvas.width = canvas.clientWidth * dpr
+    canvas.height = canvas.clientHeight * dpr
+    canvas.getContext('2d')?.setTransform(dpr, 0, 0, dpr, 0, 0)
+    renderWaveform()
+  }, [renderWaveform, waveformPeaks])
+
+  async function selectRecording(rec: Recording) {
+    setSelectedRecording(rec)
+    const peaks = await computeWaveformPeaks(rec.url)
+    peaksRef.current = peaks
+    setWaveformPeaks(peaks)
+    playheadRef.current = 0
+  }
 
   // Populate the device list. Labels only appear once we have mic permission,
   // so refresh again after the stream starts.
@@ -406,31 +505,36 @@ function App() {
   }
 
   async function startMonitor() {
+    setHasInteracted(true)
     await openMic()
     setStatus('monitoring')
   }
 
-  function stopMonitor() {
-    teardown()
-    setStatus('idle')
-  }
-
   async function startRecording() {
+    setHasInteracted(true)
     // Record straight from idle by opening the mic first; if we're already
     // monitoring, just attach the recorder to the live stream.
     if (!streamRef.current) await openMic()
 
     const recorder = new MediaRecorder(streamRef.current!)
     mediaRecorderRef.current = recorder
+    const startedAt = Date.now()
+    recordStartRef.current = startedAt
     const chunks: Blob[] = []
     recorder.ondataavailable = (e) => {
       if (e.data.size) chunks.push(e.data)
     }
     recorder.onstop = () => {
       const blob = new Blob(chunks, { type: recorder.mimeType || 'audio/webm' })
-      if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current)
-      objectUrlRef.current = URL.createObjectURL(blob)
-      setHasRecording(true)
+      const recording: Recording = {
+        id: crypto.randomUUID(),
+        createdAt: startedAt,
+        durationMs: Date.now() - startedAt,
+        url: URL.createObjectURL(blob),
+      }
+      // Newest first.
+      setRecordings((prev) => [recording, ...prev])
+      selectRecording(recording)
     }
     recorder.start()
     setStatus('recording')
@@ -443,13 +547,9 @@ function App() {
     setStatus('monitoring')
   }
 
-  async function startPlayback() {
+  async function startPlayback(url: string) {
     // Playback drives its own audio graph, so release the mic first.
     teardown()
-
-
-    const url = objectUrlRef.current
-    if (!url) return
 
     const audio = new Audio(url)
     audioElRef.current = audio
@@ -467,28 +567,81 @@ function App() {
 
     audio.onended = () => stopPlayback()
 
+    const updatePlayhead = () => {
+      if (audio.duration && selectedRecording) {
+        playheadRef.current = audio.currentTime / audio.duration
+        renderWaveform()
+      }
+      if (!isPaused) {
+        waveformRafRef.current = requestAnimationFrame(updatePlayhead)
+      }
+    }
+
     runAnalysis(analyser, audioContext.sampleRate)
     await audio.play()
     setStatus('playing')
+    setIsPaused(false)
+    updatePlayhead()
+  }
+
+  function pausePlayback() {
+    audioElRef.current?.pause()
+    setIsPaused(true)
+    if (waveformRafRef.current !== null) {
+      cancelAnimationFrame(waveformRafRef.current)
+      waveformRafRef.current = null
+    }
+  }
+
+  async function resumePlayback() {
+    if (audioElRef.current) {
+      await audioElRef.current.play()
+      setIsPaused(false)
+      const audio = audioElRef.current
+      const updatePlayhead = () => {
+        if (audio.duration && selectedRecording) {
+          playheadRef.current = audio.currentTime / audio.duration
+          renderWaveform()
+        }
+        if (!isPaused) {
+          waveformRafRef.current = requestAnimationFrame(updatePlayhead)
+        }
+      }
+      updatePlayhead()
+    }
   }
 
   function stopPlayback() {
     teardown()
+    if (waveformRafRef.current !== null) {
+      cancelAnimationFrame(waveformRafRef.current)
+      waveformRafRef.current = null
+    }
     setStatus('idle')
+    setIsPaused(false)
+    playheadRef.current = 0
+    renderWaveform()
   }
 
-  // Clean up on unmount.
-  useEffect(() => {
-    return () => {
-      if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current)
-      teardown()
-    }
-  }, [teardown])
+  // Clean up the audio graph on unmount. (Recording object URLs live for the
+  // session; the browser frees them when the page closes.)
+  useEffect(() => teardown, [teardown])
+
+  // Play a take and switch to the graph so its pitch contour is visible.
+  function playRecording(rec: Recording) {
+    setView('graph')
+    selectRecording(rec)
+    startPlayback(rec.url)
+  }
 
   return (
     <div className="app">
     <nav className="nav">
       <div className="nav-controls">
+        <button onClick={() => setView(view === 'graph' ? 'list' : 'graph')}>
+          {view === 'graph' ? `Takes (${recordings.length})` : 'Graph'}
+        </button>
+
         <select
           value={deviceId}
           onChange={(e) => setDeviceId(e.target.value)}
@@ -501,35 +654,6 @@ function App() {
             </option>
           ))}
         </select>
-
-        {status === 'monitoring' || status === 'recording' ? (
-          <button onClick={stopMonitor} disabled={status === 'recording'}>
-            Stop
-          </button>
-        ) : (
-          <button onClick={startMonitor} disabled={status === 'playing'}>
-            Start
-          </button>
-        )}
-
-        {status === 'recording' ? (
-          <button onClick={stopRecording}>Stop rec</button>
-        ) : (
-          <button onClick={startRecording} disabled={status === 'playing'}>
-            Record
-          </button>
-        )}
-
-        {status === 'playing' ? (
-          <button onClick={stopPlayback}>Stop</button>
-        ) : (
-          <button
-            onClick={startPlayback}
-            disabled={status === 'recording' || !hasRecording}
-          >
-            Play
-          </button>
-        )}
       </div>
 
       <div className="nav-readouts">
@@ -555,8 +679,84 @@ function App() {
       </div>
     </nav>
 
-      <div className="graph" ref={graphRef}>
+      {/* Graph stays mounted (display toggle) so the canvas keeps its size and
+          the live loop never draws to a torn-down canvas. */}
+      <div
+        className="graph"
+        ref={graphRef}
+        style={{ display: view === 'graph' ? undefined : 'none' }}
+      >
         <canvas ref={canvasRef} />
+        {!hasInteracted && status === 'idle' && (
+          <button className="graph-overlay" onClick={startMonitor}>
+            <svg viewBox="0 0 100 100" className="graph-overlay-icon">
+              <polygon points="30,20 30,80 80,50" fill="currentColor" />
+            </svg>
+          </button>
+        )}
+      </div>
+
+      {view === 'list' && (
+        <div className="list">
+          {recordings.length === 0 ? (
+            <div className="list-empty">No takes yet. Hit Record to capture one.</div>
+          ) : (
+            recordings.map((rec) => (
+              <button
+                key={rec.id}
+                className="list-row"
+                onClick={() => playRecording(rec)}
+              >
+                <span className="list-time">{formatTimestamp(rec.createdAt)}</span>
+                <span className="list-dur">{formatDuration(rec.durationMs)}</span>
+              </button>
+            ))
+          )}
+        </div>
+      )}
+
+      <div className="transport">
+        <button
+          className="transport-waveform-btn"
+          onClick={(e) => {
+            const rect = e.currentTarget.getBoundingClientRect()
+            const x = e.clientX - rect.left
+            const progress = x / rect.width
+            if (audioElRef.current && selectedRecording) {
+              audioElRef.current.currentTime = progress * audioElRef.current.duration
+              playheadRef.current = progress
+              renderWaveform()
+            }
+          }}
+        >
+          <canvas ref={waveformCanvasRef} />
+        </button>
+        <div className="transport-controls">
+          {status === 'recording' ? (
+            <button onClick={stopRecording}>Stop rec</button>
+          ) : (
+            <button onClick={startRecording} disabled={status === 'playing'}>
+              Record
+            </button>
+          )}
+
+          {status === 'playing' && !isPaused ? (
+            <button onClick={pausePlayback}>Pause</button>
+          ) : status === 'playing' && isPaused ? (
+            <button onClick={resumePlayback}>Resume</button>
+          ) : (
+            <button
+              onClick={() => selectedRecording && playRecording(selectedRecording)}
+              disabled={status === 'recording' || !selectedRecording}
+            >
+              Play
+            </button>
+          )}
+
+          {status === 'playing' && (
+            <button onClick={stopPlayback}>Stop</button>
+          )}
+        </div>
       </div>
     </div>
   )
