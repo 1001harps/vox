@@ -97,10 +97,15 @@ function isBlackKey(midi: number): boolean {
   return [1, 3, 6, 8, 10].includes(((midi % 12) + 12) % 12)
 }
 
+// idle = nothing running, monitoring = live graph only, recording = monitor +
+// capture, playing = playing back a recorded clip.
+type Status = 'idle' | 'monitoring' | 'recording' | 'playing'
+
 function App() {
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([])
   const [deviceId, setDeviceId] = useState<string>('')
-  const [running, setRunning] = useState(false)
+  const [status, setStatus] = useState<Status>('idle')
+  const [hasRecording, setHasRecording] = useState(false)
   const [volume, setVolume] = useState(0)
   const [pitch, setPitch] = useState(-1)
 
@@ -110,6 +115,11 @@ function App() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const graphRef = useRef<HTMLDivElement | null>(null)
   const historyRef = useRef<Sample[]>([])
+
+  // Recording capture + the resulting playable clip.
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null)
+  const audioElRef = useRef<HTMLAudioElement | null>(null)
+  const objectUrlRef = useRef<string | null>(null)
 
   // Match the canvas backing store to its CSS size (and DPR) so it stays crisp.
   const sizeCanvas = useCallback(() => {
@@ -238,7 +248,145 @@ function App() {
     refreshDevices()
   }, [])
 
-  async function start() {
+  // The detect-smooth-graph loop, run against any analyser node -- the live mic
+  // while recording, or the recorded clip on playback. Identical pitch handling
+  // either way, so playback is graphed exactly as if the mic were live.
+  const runAnalysis = useCallback(
+    (analyser: AnalyserNode, sampleRate: number) => {
+      const timeData = new Float32Array(analyser.fftSize)
+
+      // Stabilize the reading: gate quiet noise, median-filter jitter, require
+      // big jumps to persist before committing (octave-distance jumps -- the
+      // most likely detection error -- need much longer), then ease the
+      // displayed pitch toward the committed note so transitions ramp instead
+      // of jumping squarely.
+      const NOISE_GATE = 0.015 // RMS below this counts as silence
+      const MEDIAN_WINDOW = 3 // median of recent raw readings smooths jitter
+      const SNAP_CENTS = 60 // within this, readings are treated as the same note
+      const CONFIRM_FRAMES = 3 // a normal jump must persist this long to commit
+      const OCTAVE_CONFIRM_FRAMES = 9 // octave jumps must persist much longer
+      const DISPLAY_EASE = 0.25 // how fast the displayed pitch eases to target
+      const HOLD_MS = 750 // keep showing the last note this long after silence
+
+      // True when `a` is within ~1 semitone of an octave (or two) away from `b`
+      // -- i.e. the gap looks like an octave-doubling/halving error, not a leap.
+      const nearOctave = (a: number, b: number) => {
+        const c = Math.abs(1200 * Math.log2(a / b))
+        return Math.abs(c - 1200) < 100 || Math.abs(c - 2400) < 100
+      }
+
+      let smoothed = -1 // displayed pitch (eases toward target)
+      let target = -1 // the note we currently believe is being sung
+      let lastGoodTime = 0
+      let recentRaw: number[] = []
+      let candidate = -1 // a pending note-change waiting to be confirmed
+      let candidateFrames = 0
+      historyRef.current = []
+
+      const tick = () => {
+        analyser.getFloatTimeDomainData(timeData)
+        // RMS of the waveform -> perceived loudness, roughly 0..1
+        let sum = 0
+        for (let i = 0; i < timeData.length; i++) {
+          sum += timeData[i] * timeData[i]
+        }
+        const volume = Math.sqrt(sum / timeData.length)
+        setVolume(volume)
+
+        // Noise gate: ignore detections when the signal is too quiet to be a note.
+        const raw = volume >= NOISE_GATE ? detectPitch(timeData, sampleRate) : -1
+        const now = performance.now()
+
+        if (raw > 0) {
+          // Median-filter the raw readings to smooth frame-to-frame jitter.
+          recentRaw.push(raw)
+          if (recentRaw.length > MEDIAN_WINDOW) recentRaw.shift()
+          const sorted = [...recentRaw].sort((a, b) => a - b)
+          const value = sorted[Math.floor(sorted.length / 2)]
+
+          const cents = (a: number, b: number) => Math.abs(1200 * Math.log2(a / b))
+
+          if (target < 0) {
+            target = value // first note after silence: lock on immediately
+            smoothed = value
+            candidate = -1
+            candidateFrames = 0
+          } else if (cents(value, target) <= SNAP_CENTS) {
+            target = value // same note: follow the voice (drift, vibrato)
+            candidate = -1
+            candidateFrames = 0
+          } else {
+            // Big jump: a real note change or (more often) an octave error. Only
+            // commit once it persists; octave-distance jumps must persist longer.
+            const need = nearOctave(value, target)
+              ? OCTAVE_CONFIRM_FRAMES
+              : CONFIRM_FRAMES
+            if (candidate > 0 && cents(value, candidate) <= SNAP_CENTS) {
+              candidateFrames++
+            } else {
+              candidate = value
+              candidateFrames = 1
+            }
+            if (candidateFrames >= need) {
+              target = candidate
+              candidate = -1
+              candidateFrames = 0
+            }
+          }
+
+          // Ease the displayed pitch toward the target in log space, so any
+          // transition ramps smoothly (like a voice) instead of a square jump.
+          smoothed *= Math.pow(target / smoothed, DISPLAY_EASE)
+          lastGoodTime = now
+          setPitch(smoothed)
+        } else {
+          // Gap: reset filters so the next phrase starts clean.
+          recentRaw = []
+          candidate = -1
+          candidateFrames = 0
+          if (now - lastGoodTime > HOLD_MS) {
+            smoothed = -1
+            target = -1
+            setPitch(-1)
+          }
+        }
+
+        // Append this frame to the history. Plot only frames that actually had a
+        // detection (raw > 0); silence pushes NaN so the contour ends immediately
+        // instead of trailing the held note across the hold window.
+        const history = historyRef.current
+        history.push({ t: now, midi: raw > 0 ? freqToMidi(smoothed) : NaN })
+        const cutoff = now - WINDOW_MS
+        while (history.length && history[0].t < cutoff) history.shift()
+
+        renderGraph()
+        rafRef.current = requestAnimationFrame(tick)
+      }
+      tick()
+    },
+    [renderGraph],
+  )
+
+  // Tear down the audio graph + RAF loop, shared by both record and playback.
+  const teardown = useCallback(() => {
+    if (rafRef.current !== null) cancelAnimationFrame(rafRef.current)
+    rafRef.current = null
+    streamRef.current?.getTracks().forEach((t) => t.stop())
+    streamRef.current = null
+    if (audioElRef.current) {
+      audioElRef.current.pause()
+      audioElRef.current.onended = null
+      audioElRef.current = null
+    }
+    audioContextRef.current?.close()
+    audioContextRef.current = null
+    setVolume(0)
+    setPitch(-1)
+  }, [])
+
+  // Open the mic and start the live pitch graph. Shared by Start and Record so
+  // recording can layer onto an already-running monitor (or open the mic itself).
+  async function openMic() {
     const stream = await navigator.mediaDevices.getUserMedia({
       audio: deviceId ? { deviceId: { exact: deviceId } } : true,
     })
@@ -253,137 +401,89 @@ function App() {
     analyser.fftSize = 2048
     source.connect(analyser)
 
-    const timeData = new Float32Array(analyser.fftSize)
-    const sampleRate = audioContext.sampleRate
-
-    // Stabilize the reading: gate quiet noise, median-filter jitter, require big
-    // jumps to persist before committing (octave-distance jumps -- the most
-    // likely detection error -- need much longer), then ease the displayed pitch
-    // toward the committed note so transitions ramp instead of jumping squarely.
-    const NOISE_GATE = 0.015 // RMS below this counts as silence
-    const MEDIAN_WINDOW = 3 // median of recent raw readings smooths jitter
-    const SNAP_CENTS = 60 // within this, readings are treated as the same note
-    const CONFIRM_FRAMES = 3 // a normal jump must persist this long to commit
-    const OCTAVE_CONFIRM_FRAMES = 9 // octave jumps must persist much longer
-    const DISPLAY_EASE = 0.25 // how fast the displayed pitch eases to the target
-    const HOLD_MS = 750 // keep showing the last note this long after silence
-
-    // True when `a` is within ~1 semitone of an octave (or two) away from `b` --
-    // i.e. the gap looks like an octave-doubling/halving error, not a real leap.
-    const nearOctave = (a: number, b: number) => {
-      const c = Math.abs(1200 * Math.log2(a / b))
-      return Math.abs(c - 1200) < 100 || Math.abs(c - 2400) < 100
-    }
-
-    let smoothed = -1 // displayed pitch (eases toward target)
-    let target = -1 // the note we currently believe is being sung
-    let lastGoodTime = 0
-    let recentRaw: number[] = []
-    let candidate = -1 // a pending note-change waiting to be confirmed
-    let candidateFrames = 0
-    historyRef.current = []
-
-    const tick = () => {
-      analyser.getFloatTimeDomainData(timeData)
-      // RMS of the waveform -> perceived loudness, roughly 0..1
-      let sum = 0
-      for (let i = 0; i < timeData.length; i++) {
-        sum += timeData[i] * timeData[i]
-      }
-      const volume = Math.sqrt(sum / timeData.length)
-      setVolume(volume)
-
-      // Noise gate: ignore detections when the signal is too quiet to be a note.
-      const raw = volume >= NOISE_GATE ? detectPitch(timeData, sampleRate) : -1
-      const now = performance.now()
-
-      if (raw > 0) {
-        // Median-filter the raw readings to smooth frame-to-frame jitter.
-        recentRaw.push(raw)
-        if (recentRaw.length > MEDIAN_WINDOW) recentRaw.shift()
-        const sorted = [...recentRaw].sort((a, b) => a - b)
-        const value = sorted[Math.floor(sorted.length / 2)]
-
-        const cents = (a: number, b: number) => Math.abs(1200 * Math.log2(a / b))
-
-        if (target < 0) {
-          target = value // first note after silence: lock on immediately
-          smoothed = value
-          candidate = -1
-          candidateFrames = 0
-        } else if (cents(value, target) <= SNAP_CENTS) {
-          target = value // same note: follow the voice (drift, vibrato)
-          candidate = -1
-          candidateFrames = 0
-        } else {
-          // Big jump: a real note change or (more often) an octave error. Only
-          // commit once it persists; octave-distance jumps must persist longer.
-          const need = nearOctave(value, target)
-            ? OCTAVE_CONFIRM_FRAMES
-            : CONFIRM_FRAMES
-          if (candidate > 0 && cents(value, candidate) <= SNAP_CENTS) {
-            candidateFrames++
-          } else {
-            candidate = value
-            candidateFrames = 1
-          }
-          if (candidateFrames >= need) {
-            target = candidate
-            candidate = -1
-            candidateFrames = 0
-          }
-        }
-
-        // Ease the displayed pitch toward the target in log space, so any
-        // transition ramps smoothly (like a voice) instead of a square jump.
-        smoothed *= Math.pow(target / smoothed, DISPLAY_EASE)
-        lastGoodTime = now
-        setPitch(smoothed)
-      } else {
-        // Gap: reset filters so the next phrase starts clean.
-        recentRaw = []
-        candidate = -1
-        candidateFrames = 0
-        if (now - lastGoodTime > HOLD_MS) {
-          smoothed = -1
-          target = -1
-          setPitch(-1)
-        }
-      }
-
-      // Append this frame to the history. Plot only frames that actually had a
-      // detection (raw > 0); silence pushes NaN so the contour ends immediately
-      // instead of trailing the held note across the hold window.
-      const history = historyRef.current
-      history.push({ t: now, midi: raw > 0 ? freqToMidi(smoothed) : NaN })
-      const cutoff = now - WINDOW_MS
-      while (history.length && history[0].t < cutoff) history.shift()
-
-      renderGraph()
-      rafRef.current = requestAnimationFrame(tick)
-    }
-    tick()
-
-    setRunning(true)
+    runAnalysis(analyser, audioContext.sampleRate)
     refreshDevices()
   }
 
-  function stop() {
-    if (rafRef.current !== null) cancelAnimationFrame(rafRef.current)
-    streamRef.current?.getTracks().forEach((t) => t.stop())
-    audioContextRef.current?.close()
-    rafRef.current = null
-    streamRef.current = null
-    audioContextRef.current = null
-    setRunning(false)
-    setVolume(0)
-    setPitch(-1)
-    historyRef.current = []
-    renderGraph()
+  async function startMonitor() {
+    await openMic()
+    setStatus('monitoring')
+  }
+
+  function stopMonitor() {
+    teardown()
+    setStatus('idle')
+  }
+
+  async function startRecording() {
+    // Record straight from idle by opening the mic first; if we're already
+    // monitoring, just attach the recorder to the live stream.
+    if (!streamRef.current) await openMic()
+
+    const recorder = new MediaRecorder(streamRef.current!)
+    mediaRecorderRef.current = recorder
+    const chunks: Blob[] = []
+    recorder.ondataavailable = (e) => {
+      if (e.data.size) chunks.push(e.data)
+    }
+    recorder.onstop = () => {
+      const blob = new Blob(chunks, { type: recorder.mimeType || 'audio/webm' })
+      if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current)
+      objectUrlRef.current = URL.createObjectURL(blob)
+      setHasRecording(true)
+    }
+    recorder.start()
+    setStatus('recording')
+  }
+
+  // Stop capturing but leave the mic + graph running, so you can keep going.
+  function stopRecording() {
+    mediaRecorderRef.current?.stop()
+    mediaRecorderRef.current = null
+    setStatus('monitoring')
+  }
+
+  async function startPlayback() {
+    // Playback drives its own audio graph, so release the mic first.
+    teardown()
+
+
+    const url = objectUrlRef.current
+    if (!url) return
+
+    const audio = new Audio(url)
+    audioElRef.current = audio
+
+    const audioContext = new AudioContext()
+    audioContextRef.current = audioContext
+    await audioContext.resume()
+
+    // Route the clip through an analyser (for the graph) and on to the speakers.
+    const source = audioContext.createMediaElementSource(audio)
+    const analyser = audioContext.createAnalyser()
+    analyser.fftSize = 2048
+    source.connect(analyser)
+    analyser.connect(audioContext.destination)
+
+    audio.onended = () => stopPlayback()
+
+    runAnalysis(analyser, audioContext.sampleRate)
+    await audio.play()
+    setStatus('playing')
+  }
+
+  function stopPlayback() {
+    teardown()
+    setStatus('idle')
   }
 
   // Clean up on unmount.
-  useEffect(() => stop, [])
+  useEffect(() => {
+    return () => {
+      if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current)
+      teardown()
+    }
+  }, [teardown])
 
   return (
     <div className="app">
@@ -392,7 +492,7 @@ function App() {
         <select
           value={deviceId}
           onChange={(e) => setDeviceId(e.target.value)}
-          disabled={running}
+          disabled={status !== 'idle'}
         >
           <option value="">Default input</option>
           {devices.map((d) => (
@@ -402,10 +502,33 @@ function App() {
           ))}
         </select>
 
-        {running ? (
-          <button onClick={stop}>Stop</button>
+        {status === 'monitoring' || status === 'recording' ? (
+          <button onClick={stopMonitor} disabled={status === 'recording'}>
+            Stop
+          </button>
         ) : (
-          <button onClick={start}>Start</button>
+          <button onClick={startMonitor} disabled={status === 'playing'}>
+            Start
+          </button>
+        )}
+
+        {status === 'recording' ? (
+          <button onClick={stopRecording}>Stop rec</button>
+        ) : (
+          <button onClick={startRecording} disabled={status === 'playing'}>
+            Record
+          </button>
+        )}
+
+        {status === 'playing' ? (
+          <button onClick={stopPlayback}>Stop</button>
+        ) : (
+          <button
+            onClick={startPlayback}
+            disabled={status === 'recording' || !hasRecording}
+          >
+            Play
+          </button>
         )}
       </div>
 
