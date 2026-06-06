@@ -87,11 +87,9 @@ function App() {
     setRecordings(loaded);
   }
 
-  const loadedRef = useRef<null | undefined>(null);
-  if (loadedRef.current == null) {
-    loadedRef.current = undefined;
+  useEffect(() => {
     loadRecordings();
-  }
+  }, []);
 
   // Clean up the audio graph on unmount.
   useEffect(() => () => engine.teardown(), [engine]);
