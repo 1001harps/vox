@@ -179,6 +179,8 @@ function App() {
   const peaksRef = useRef<Float32Array | null>(null)
   const playheadRef = useRef<number>(0)
   const waveformRafRef = useRef<number | null>(null)
+  const isDraggingRef = useRef<boolean>(false)
+  const hasDraggedRef = useRef<boolean>(false)
 
   // Match the canvas backing store to its CSS size (and DPR) so it stays crisp.
   const sizeCanvas = useCallback(() => {
@@ -334,6 +336,44 @@ function App() {
     peaksRef.current = peaks
     setWaveformPeaks(peaks)
     playheadRef.current = 0
+  }
+
+  function seekToPosition(clientX: number) {
+    const canvas = waveformCanvasRef.current
+    if (!canvas || !audioElRef.current || !selectedRecording) return
+    const rect = canvas.getBoundingClientRect()
+    const x = clientX - rect.left
+    const progress = Math.max(0, Math.min(1, x / rect.width))
+    audioElRef.current.currentTime = progress * audioElRef.current.duration
+    playheadRef.current = progress
+    renderWaveform()
+  }
+
+  function handleWaveformPointerDown(e: React.MouseEvent | React.TouchEvent) {
+    isDraggingRef.current = true
+    hasDraggedRef.current = false
+    const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX
+    seekToPosition(clientX)
+  }
+
+  function handleWaveformPointerMove(e: React.MouseEvent | React.TouchEvent) {
+    if (!isDraggingRef.current) return
+    hasDraggedRef.current = true
+    const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX
+    seekToPosition(clientX)
+  }
+
+  function handleWaveformPointerUp() {
+    isDraggingRef.current = false
+  }
+
+  function handleWaveformClick(e: React.MouseEvent) {
+    if (hasDraggedRef.current) {
+      e.preventDefault()
+      hasDraggedRef.current = false
+      return
+    }
+    seekToPosition(e.clientX)
   }
 
   // Populate the device list. Labels only appear once we have mic permission,
@@ -718,16 +758,14 @@ function App() {
       <div className="transport">
         <button
           className="transport-waveform-btn"
-          onClick={(e) => {
-            const rect = e.currentTarget.getBoundingClientRect()
-            const x = e.clientX - rect.left
-            const progress = x / rect.width
-            if (audioElRef.current && selectedRecording) {
-              audioElRef.current.currentTime = progress * audioElRef.current.duration
-              playheadRef.current = progress
-              renderWaveform()
-            }
-          }}
+          onClick={handleWaveformClick}
+          onMouseDown={handleWaveformPointerDown}
+          onMouseMove={handleWaveformPointerMove}
+          onMouseUp={handleWaveformPointerUp}
+          onMouseLeave={handleWaveformPointerUp}
+          onTouchStart={handleWaveformPointerDown}
+          onTouchMove={handleWaveformPointerMove}
+          onTouchEnd={handleWaveformPointerUp}
         >
           <canvas ref={waveformCanvasRef} />
         </button>
