@@ -89,20 +89,43 @@ body {
 
 .list-row {
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
+  align-items: center;
   width: 100%;
   box-sizing: border-box;
+  border-bottom: 1px solid #eee;
+}
+
+.list-row-play {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
   padding: 16px;
   border: none;
-  border-bottom: 1px solid #eee;
   background: none;
   font: inherit;
   text-align: left;
   cursor: pointer;
+  min-width: 0;
 }
 
-.list-row:active {
+.list-row-play:active {
+  background: #f2f2f2;
+}
+
+.list-row-delete {
+  flex: 0 0 auto;
+  padding: 8px 16px;
+  margin-right: 16px;
+  border: 1px solid #ccc;
+  background: none;
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+  color: #666;
+}
+
+.list-row-delete:active {
   background: #f2f2f2;
 }
 

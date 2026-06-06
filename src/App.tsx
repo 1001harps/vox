@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { IndexedDBStorage, type RecordingData, type RecordingStorage } from './storage'
 
 const NOTE_NAMES = [
   'C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B',
@@ -101,13 +102,15 @@ function isBlackKey(midi: number): boolean {
 // capture, playing = playing back a recorded clip.
 type Status = 'idle' | 'monitoring' | 'recording' | 'playing'
 
-// A saved take. In-memory only for now -- lost on refresh.
+// A saved take. In-memory representation with object URL for playback.
 type Recording = {
   id: string
   createdAt: number // ms epoch, captured when recording started
   durationMs: number
   url: string // object URL for the captured blob
 }
+
+const storage: RecordingStorage = new IndexedDBStorage()
 
 // Which screen is showing.
 type View = 'graph' | 'list'
@@ -387,6 +390,21 @@ function App() {
     refreshDevices()
   }, [])
 
+  async function loadRecordings() {
+    const data = await storage.getAll()
+    const loaded: Recording[] = data.map((d) => ({
+      id: d.id,
+      createdAt: d.createdAt,
+      durationMs: d.durationMs,
+      url: URL.createObjectURL(d.blob),
+    }))
+    setRecordings(loaded)
+  }
+
+  useEffect(() => {
+    loadRecordings()
+  }, [])
+
   // The detect-smooth-graph loop, run against any analyser node -- the live mic
   // while recording, or the recorded clip on playback. Identical pitch handling
   // either way, so playback is graphed exactly as if the mic were live.
@@ -575,6 +593,13 @@ function App() {
       // Newest first.
       setRecordings((prev) => [recording, ...prev])
       selectRecording(recording)
+      const data: RecordingData = {
+        id: recording.id,
+        createdAt: recording.createdAt,
+        durationMs: recording.durationMs,
+        blob,
+      }
+      storage.save(data)
     }
     recorder.start()
     setStatus('recording')
@@ -674,6 +699,19 @@ function App() {
     startPlayback(rec.url)
   }
 
+  async function deleteRecording(rec: Recording) {
+    if (!confirm('Delete this recording?')) return
+    await storage.delete(rec.id)
+    URL.revokeObjectURL(rec.url)
+    setRecordings((prev) => prev.filter((r) => r.id !== rec.id))
+    if (selectedRecording?.id === rec.id) {
+      setSelectedRecording(null)
+      setWaveformPeaks(null)
+      peaksRef.current = null
+      playheadRef.current = 0
+    }
+  }
+
   return (
     <div className="app">
     <nav className="nav">
@@ -742,14 +780,21 @@ function App() {
             <div className="list-empty">No takes yet. Hit Record to capture one.</div>
           ) : (
             recordings.map((rec) => (
-              <button
-                key={rec.id}
-                className="list-row"
-                onClick={() => playRecording(rec)}
-              >
-                <span className="list-time">{formatTimestamp(rec.createdAt)}</span>
-                <span className="list-dur">{formatDuration(rec.durationMs)}</span>
-              </button>
+              <div key={rec.id} className="list-row">
+                <button
+                  className="list-row-play"
+                  onClick={() => playRecording(rec)}
+                >
+                  <span className="list-time">{formatTimestamp(rec.createdAt)}</span>
+                  <span className="list-dur">{formatDuration(rec.durationMs)}</span>
+                </button>
+                <button
+                  className="list-row-delete"
+                  onClick={() => deleteRecording(rec)}
+                >
+                  Delete
+                </button>
+              </div>
             ))
           )}
         </div>
