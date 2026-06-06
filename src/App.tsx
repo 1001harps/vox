@@ -13,8 +13,6 @@ import {
 import { computeProgressStats } from "./utils/progress";
 import { computeWaveformPeaks } from "./utils/waveform";
 import {
-  detectPitch,
-  freqToMidi,
   isBlackKey,
   LANES,
   MAX_MIDI,
@@ -23,6 +21,7 @@ import {
   noteFromPitch,
   WINDOW_MS,
 } from "./audio/pitch";
+import { startAnalysis } from "./audio/analysis";
 
 // idle = nothing running, monitoring = live graph only, recording = monitor +
 // capture, playing = playing back a recorded clip.
@@ -85,7 +84,6 @@ function App() {
 
   const audioContextRef = useRef<AudioContext | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
-  const rafRef = useRef<number | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const graphRef = useRef<HTMLDivElement | null>(null);
   const pitchDisplayRef = useRef<HTMLSpanElement | null>(null);
@@ -366,196 +364,88 @@ function App() {
     loadRecordings();
   }
 
+  const stopAnalysisRef = useRef<(() => void) | null>(null);
+
+  // Draw the live recording waveform: accumulate one amplitude peak per frame
+  // and draw the whole take as bars. While it fits, bars grow left -> right
+  // (the waveform "expands" as you record); once it fills the strip, the bars
+  // downsample to keep the entire take visible (Voice-Memos style).
+  const drawLiveWaveform = useCallback((_timeData: Float32Array, peak: number) => {
+    const lwCanvas = liveWaveformCanvasRef.current;
+    if (!lwCanvas) return;
+    const lwCtx = lwCanvas.getContext("2d");
+    if (!lwCtx) return;
+    const dpr = window.devicePixelRatio || 1;
+    const lwWidth = lwCanvas.width / dpr;
+    const lwHeight = lwCanvas.height / dpr;
+
+    const wave = recordingWaveRef.current;
+    wave.push(peak);
+
+    lwCtx.clearRect(0, 0, lwWidth, lwHeight);
+    lwCtx.fillStyle = "#555";
+
+    const slot = 3; // px per bar (bar + gap)
+    const barW = 2;
+    const maxBars = Math.max(1, Math.floor(lwWidth / slot));
+
+    // Fit the whole take into the strip: take the max of each group once
+    // there are more samples than bar slots.
+    let bars: number[];
+    if (wave.length <= maxBars) {
+      bars = wave;
+    } else {
+      bars = new Array(maxBars);
+      for (let i = 0; i < maxBars; i++) {
+        const start = Math.floor((i * wave.length) / maxBars);
+        const end = Math.floor(((i + 1) * wave.length) / maxBars);
+        let m = 0;
+        for (let j = start; j < end; j++) {
+          if (wave[j] > m) m = wave[j];
+        }
+        bars[i] = m;
+      }
+    }
+
+    const midY = lwHeight / 2;
+    for (let i = 0; i < bars.length; i++) {
+      const h = Math.max(1, bars[i] * lwHeight);
+      lwCtx.fillRect(i * slot, midY - h / 2, barW, h);
+    }
+  }, []);
+
   // The detect-smooth-graph loop, run against any analyser node -- the live mic
   // while recording, or the recorded clip on playback. Identical pitch handling
   // either way, so playback is graphed exactly as if the mic were live.
   const runAnalysis = useCallback(
     (analyser: AnalyserNode, sampleRate: number) => {
       analyserRef.current = analyser;
-      const timeData = new Float32Array(analyser.fftSize);
-
-      // Stabilize the reading: gate quiet noise, median-filter jitter, require
-      // big jumps to persist before committing (octave-distance jumps -- the
-      // most likely detection error -- need much longer), then ease the
-      // displayed pitch toward the committed note so transitions ramp instead
-      // of jumping squarely.
-      const NOISE_GATE = 0.015; // RMS below this counts as silence
-      const MEDIAN_WINDOW = 3; // median of recent raw readings smooths jitter
-      const SNAP_CENTS = 60; // within this, readings are treated as the same note
-      const CONFIRM_FRAMES = 3; // a normal jump must persist this long to commit
-      const OCTAVE_CONFIRM_FRAMES = 9; // octave jumps must persist much longer
-      const DISPLAY_EASE = 0.25; // how fast the displayed pitch eases to target
-      const HOLD_MS = 750; // keep showing the last note this long after silence
-
-      // True when `a` is within ~1 semitone of an octave (or two) away from `b`
-      // -- i.e. the gap looks like an octave-doubling/halving error, not a leap.
-      const nearOctave = (a: number, b: number) => {
-        const c = Math.abs(1200 * Math.log2(a / b));
-        return Math.abs(c - 1200) < 100 || Math.abs(c - 2400) < 100;
-      };
-
-      let smoothed = -1; // displayed pitch (eases toward target)
-      let target = -1; // the note we currently believe is being sung
-      let lastGoodTime = 0;
-      let recentRaw: number[] = [];
-      let candidate = -1; // a pending note-change waiting to be confirmed
-      let candidateFrames = 0;
-      historyRef.current = { samples: [], start: 0 };
-
-      const tick = () => {
-        analyser.getFloatTimeDomainData(timeData);
-        // RMS of the waveform -> perceived loudness, roughly 0..1
-        let sum = 0;
-        for (let i = 0; i < timeData.length; i++) {
-          sum += timeData[i] * timeData[i];
-        }
-        const vol = Math.sqrt(sum / timeData.length);
-
-        // Noise gate: ignore detections when the signal is too quiet to be a note.
-        const raw = vol >= NOISE_GATE ? detectPitch(timeData, sampleRate) : -1;
-        const now = performance.now();
-
-        if (raw > 0) {
-          // Median-filter the raw readings to smooth frame-to-frame jitter.
-          recentRaw.push(raw);
-          if (recentRaw.length > MEDIAN_WINDOW) recentRaw.shift();
-          const sorted = [...recentRaw].sort((a, b) => a - b);
-          const value = sorted[Math.floor(sorted.length / 2)];
-
-          const cents = (a: number, b: number) =>
-            Math.abs(1200 * Math.log2(a / b));
-
-          if (target < 0) {
-            target = value; // first note after silence: lock on immediately
-            smoothed = value;
-            candidate = -1;
-            candidateFrames = 0;
-          } else if (cents(value, target) <= SNAP_CENTS) {
-            target = value; // same note: follow the voice (drift, vibrato)
-            candidate = -1;
-            candidateFrames = 0;
-          } else {
-            // Big jump: a real note change or (more often) an octave error. Only
-            // commit once it persists; octave-distance jumps must persist longer.
-            const need = nearOctave(value, target)
-              ? OCTAVE_CONFIRM_FRAMES
-              : CONFIRM_FRAMES;
-            if (candidate > 0 && cents(value, candidate) <= SNAP_CENTS) {
-              candidateFrames++;
-            } else {
-              candidate = value;
-              candidateFrames = 1;
-            }
-            if (candidateFrames >= need) {
-              target = candidate;
-              candidate = -1;
-              candidateFrames = 0;
-            }
-          }
-
-          // Ease the displayed pitch toward the target in log space, so any
-          // transition ramps smoothly (like a voice) instead of a square jump.
-          smoothed *= Math.pow(target / smoothed, DISPLAY_EASE);
-          lastGoodTime = now;
+      stopAnalysisRef.current = startAnalysis(analyser, sampleRate, historyRef, {
+        onRenderGraph: renderGraph,
+        onPitchUpdate: (noteName, inTune) => {
           const pitchEl = pitchDisplayRef.current;
           if (pitchEl) {
-            const note = noteFromPitch(smoothed);
-            const inTune = Math.abs(note.cents) <= 5;
-            pitchEl.textContent = note.name;
+            pitchEl.textContent = noteName;
             pitchEl.style.color = inTune ? "#2e9e4f" : "#111";
           }
-        } else {
-          recentRaw = [];
-          candidate = -1;
-          candidateFrames = 0;
-          if (now - lastGoodTime > HOLD_MS) {
-            smoothed = -1;
-            target = -1;
-            const pitchEl = pitchDisplayRef.current;
-            if (pitchEl) {
-              pitchEl.textContent = "\u2014";
-              pitchEl.style.color = "#111";
-            }
+        },
+        onPitchClear: () => {
+          const pitchEl = pitchDisplayRef.current;
+          if (pitchEl) {
+            pitchEl.textContent = "\u2014";
+            pitchEl.style.color = "#111";
           }
-        }
-
-        const history = historyRef.current;
-        history.samples.push({ t: now, midi: raw > 0 ? freqToMidi(smoothed) : NaN });
-        const cutoff = now - WINDOW_MS;
-        while (history.start < history.samples.length && history.samples[history.start].t < cutoff) history.start++;
-        if (history.start > 512) {
-          history.samples.splice(0, history.start);
-          history.start = 0;
-        }
-
-        renderGraph();
-
-        // Live recording waveform: accumulate one amplitude peak per frame and
-        // draw the whole take as bars. While it fits, bars grow left -> right
-        // (the waveform "expands" as you record); once it fills the strip, the
-        // bars downsample to keep the entire take visible (Voice-Memos style).
-        const lwCanvas = liveWaveformCanvasRef.current;
-        if (lwCanvas) {
-          const lwCtx = lwCanvas.getContext("2d");
-          if (lwCtx) {
-            const dpr = window.devicePixelRatio || 1;
-            const lwWidth = lwCanvas.width / dpr;
-            const lwHeight = lwCanvas.height / dpr;
-
-            // Peak amplitude of this frame (matches the saved-take waveform's
-            // max-abs scaling, so live and played-back waveforms look alike).
-            let peak = 0;
-            for (let i = 0; i < timeData.length; i++) {
-              const a = Math.abs(timeData[i]);
-              if (a > peak) peak = a;
-            }
-            const wave = recordingWaveRef.current;
-            wave.push(peak);
-
-            lwCtx.clearRect(0, 0, lwWidth, lwHeight);
-            lwCtx.fillStyle = "#555";
-
-            const slot = 3; // px per bar (bar + gap)
-            const barW = 2;
-            const maxBars = Math.max(1, Math.floor(lwWidth / slot));
-
-            // Fit the whole take into the strip: take the max of each group once
-            // there are more samples than bar slots.
-            let bars: number[];
-            if (wave.length <= maxBars) {
-              bars = wave;
-            } else {
-              bars = new Array(maxBars);
-              for (let i = 0; i < maxBars; i++) {
-                const start = Math.floor((i * wave.length) / maxBars);
-                const end = Math.floor(((i + 1) * wave.length) / maxBars);
-                let m = 0;
-                for (let j = start; j < end; j++) {
-                  if (wave[j] > m) m = wave[j];
-                }
-                bars[i] = m;
-              }
-            }
-
-            const midY = lwHeight / 2;
-            for (let i = 0; i < bars.length; i++) {
-              const h = Math.max(1, bars[i] * lwHeight);
-              lwCtx.fillRect(i * slot, midY - h / 2, barW, h);
-            }
-          }
-        }
-
-        rafRef.current = requestAnimationFrame(tick);
-      };
-      tick();
+        },
+        onFrame: drawLiveWaveform,
+      });
     },
-    [renderGraph],
+    [renderGraph, drawLiveWaveform],
   );
 
   // Tear down the audio graph + RAF loop, shared by both record and playback.
   const teardown = useCallback(() => {
-    if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
-    rafRef.current = null;
+    stopAnalysisRef.current?.();
+    stopAnalysisRef.current = null;
     streamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current = null;
     analyserRef.current = null;
