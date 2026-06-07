@@ -4,7 +4,6 @@ import {
   type RecordingStorage,
 } from "./storage";
 import type { Recording, View } from "./types";
-import { groupRecordingsByDate } from "./utils/format";
 import { computeProgressStats } from "./utils/progress";
 import { computeWaveformPeaks } from "./utils/waveform";
 import { type Status } from "./audio/engine";
@@ -16,7 +15,6 @@ import { Sidebar, RecordingsList } from "./components/Sidebar";
 import { TabBar } from "./components/TabBar";
 import { StatsCard } from "./components/StatsCard";
 import { useDesktopMediaQuery } from "./hooks/useDesktopMediaQuery";
-import { useRecordingPeaks } from "./hooks/useRecordingPeaks";
 import { useAudioEngine } from "./hooks/useAudioEngine";
 
 const storage: RecordingStorage = new IndexedDBStorage();
@@ -58,10 +56,6 @@ function App() {
       selectRecording(recording);
     },
   });
-
-  // Compute waveform peaks for sidebar thumbnails
-  const shouldComputePeaks = view === "recordings" || isDesktop;
-  const recordingPeaks = useRecordingPeaks(recordings, shouldComputePeaks);
 
   async function selectRecording(rec: Recording) {
     setSelectedRecording(rec);
@@ -151,7 +145,6 @@ function App() {
   }
 
   const progressStats = useMemo(() => computeProgressStats(recordings), [recordings]);
-  const groupedRecordings = useMemo(() => groupRecordingsByDate(recordings), [recordings]);
 
   // Single source of truth for the transport bar. Derived from the existing
   // engine state so the audio wiring is untouched (see TODO.md §1):
@@ -180,8 +173,7 @@ function App() {
     <div className="app">
       <Sidebar
         effectiveView={effectiveView}
-        groupedRecordings={groupedRecordings}
-        recordingPeaks={recordingPeaks}
+        recordings={recordings}
         selectedRecording={selectedRecording}
         onSetView={setView}
         onPlayRecording={playRecording}
@@ -251,8 +243,7 @@ function App() {
                 Progress
               </button>
               <RecordingsList
-                groupedRecordings={groupedRecordings}
-                recordingPeaks={recordingPeaks}
+                recordings={recordings}
                 selectedRecording={selectedRecording}
                 onPlayRecording={playRecording}
                 onDeleteRecording={deleteRecording}

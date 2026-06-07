@@ -306,20 +306,10 @@ body {
   background: #f2f2f2;
 }
 
-.recordings-group {
-  padding: 0 16px;
-}
-
-.recordings-date-header {
-  font-size: 13px;
-  font-weight: 600;
-  color: #888;
-  padding: 16px 0 8px;
-}
-
 .recording-row {
   display: flex;
   align-items: center;
+  padding: 0 16px;
   border-bottom: 1px solid #eee;
 }
 
@@ -344,32 +334,23 @@ body {
   gap: 2px;
 }
 
-.recording-time {
-  font-size: 18px;
+.recording-date {
+  font-size: 16px;
   font-weight: 500;
   color: #111;
+}
+
+.recording-time {
+  font-size: 13px;
+  color: #888;
+  font-variant-numeric: tabular-nums;
 }
 
 .recording-duration {
   font-size: 13px;
   color: #888;
   font-variant-numeric: tabular-nums;
-}
-
-.waveform-thumbnail {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  width: 60px;
-  height: 30px;
   padding: 0 8px;
-}
-
-.waveform-bar {
-  flex: 1;
-  background: #ccc;
-  border-radius: 1px;
-  min-height: 2px;
 }
 
 .recording-row-delete {
