@@ -121,14 +121,28 @@ export const PlaybackWaveform = forwardRef<PlaybackWaveformHandle, PlaybackWavef
       const height = canvas.height / dpr;
       ctx.clearRect(0, 0, width, height);
       if (!peaks || peaks.length === 0) return;
-      const barWidth = width / peaks.length;
+
+      // Draw as many fixed-width bars as the canvas can hold (matching the live
+      // preview's density) rather than squeezing all source peaks into the
+      // width — on a narrow canvas that left sub-pixel bars that washed out.
+      const slot = 3; // px per bar (bar + gap)
+      const barW = 2;
+      const bars = Math.max(1, Math.min(peaks.length, Math.floor(width / slot)));
       const midY = height / 2;
       const progress = playheadRef.current ?? 0;
-      for (let i = 0; i < peaks.length; i++) {
-        const barHeight = peaks[i] * height;
-        const x = i * barWidth;
-        ctx.fillStyle = i / peaks.length <= progress ? "#333" : "#ccc";
-        ctx.fillRect(x, midY - barHeight / 2, barWidth - 1, barHeight);
+
+      for (let i = 0; i < bars; i++) {
+        // Aggregate the source peaks that fall into this bar.
+        const start = Math.floor((i * peaks.length) / bars);
+        const end = Math.floor(((i + 1) * peaks.length) / bars);
+        let peak = 0;
+        for (let j = start; j < end; j++) {
+          if (peaks[j] > peak) peak = peaks[j];
+        }
+        const barHeight = peak * height;
+        const x = i * slot;
+        ctx.fillStyle = i / bars <= progress ? "#333" : "#ccc";
+        ctx.fillRect(x, midY - barHeight / 2, barW, barHeight);
       }
     }, [peaks, playheadRef]);
 
@@ -139,6 +153,14 @@ export const PlaybackWaveform = forwardRef<PlaybackWaveformHandle, PlaybackWavef
     useEffect(() => {
       sizeCanvas();
       renderWaveform();
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const ro = new ResizeObserver(() => {
+        sizeCanvas();
+        renderWaveform();
+      });
+      ro.observe(canvas);
+      return () => ro.disconnect();
     }, [sizeCanvas, renderWaveform]);
 
     function getProgress(clientX: number): number {
