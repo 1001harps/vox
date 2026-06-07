@@ -168,16 +168,54 @@ function App() {
 
   return (
     <div className="app">
-      <Sidebar
-        effectiveView={effectiveView}
-        recordings={recordings}
-        selectedRecording={selectedRecording}
-        onSetView={setView}
-        onPlayRecording={playRecording}
-        onDeleteRecording={deleteRecording}
-      />
-      <div className="main-pane">
-        <div className="content">
+      <div className="top-nav">
+        <nav className="top-nav-buttons">
+          <button
+            className={`top-nav-btn${effectiveView === "practice" ? " top-nav-btn-active" : ""}`}
+            onClick={() => setView("practice")}
+          >
+            <svg
+              viewBox="0 0 24 24"
+              className="top-nav-icon"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+            >
+              <path d="M2 12C6 4 10 4 12 12C14 20 18 20 22 12" />
+            </svg>
+            Practice
+          </button>
+          <button
+            className={`top-nav-btn${effectiveView === "progress" ? " top-nav-btn-active" : ""}`}
+            onClick={() => setView("progress")}
+          >
+            <svg
+              viewBox="0 0 20 20"
+              className="top-nav-icon"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.5"
+            >
+              <rect x="3" y="10" width="3" height="7" rx="0.5" />
+              <rect x="8.5" y="6" width="3" height="11" rx="0.5" />
+              <rect x="14" y="3" width="3" height="14" rx="0.5" />
+            </svg>
+            Progress
+          </button>
+        </nav>
+      </div>
+      <div className="app-body">
+        <Sidebar
+          effectiveView={effectiveView}
+          recordings={recordings}
+          selectedRecording={selectedRecording}
+          onSetView={setView}
+          onPlayRecording={playRecording}
+          onDeleteRecording={deleteRecording}
+        />
+        <div className="main-pane">
+          <div className="content">
           {
             /* Practice view stays mounted (display toggle) so the canvas keeps its
             size and the live loop never draws to a torn-down canvas. */
@@ -255,6 +293,7 @@ function App() {
         </div>
 
         <TabBar effectiveView={effectiveView} onSetView={setView} />
+        </div>
       </div>
     </div>
   );

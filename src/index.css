@@ -13,6 +13,48 @@ body {
 }
 
 /* Content area */
+.top-nav {
+  display: none;
+  border-bottom: 1px solid #ddd;
+  align-items: center;
+  padding: 12px 16px;
+}
+
+.top-nav-buttons {
+  display: none;
+  gap: 8px;
+}
+
+.top-nav-btn {
+  padding: 8px 16px;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  background: none;
+  font-size: 14px;
+  cursor: pointer;
+  color: #666;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.top-nav-btn-active {
+  background: #fff;
+  border-color: #ccc;
+  color: #111;
+}
+
+.top-nav-icon {
+  width: 20px;
+  height: 20px;
+}
+
+.app-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
 .content {
   flex: 1;
   min-height: 0;
@@ -436,41 +478,13 @@ body {
 .main-pane {
   display: flex;
   flex-direction: column;
-  height: 100%;
+  flex: 1;
   min-width: 0;
 }
 
 /* Sidebar — hidden on mobile */
 .sidebar {
   display: none;
-}
-
-.sidebar-nav {
-  display: flex;
-  gap: 8px;
-  padding: 12px 16px;
-  border-bottom: 1px solid #eee;
-}
-
-.sidebar-nav-btn {
-  flex: 1;
-  padding: 8px 12px;
-  border: 1px solid #ddd;
-  border-radius: 8px;
-  background: none;
-  font-size: 14px;
-  cursor: pointer;
-  color: #888;
-}
-
-.sidebar-nav-btn:active {
-  background: #f2f2f2;
-}
-
-.sidebar-nav-btn-active {
-  color: #111;
-  font-weight: 600;
-  border-color: #111;
 }
 
 .sidebar-recordings {
@@ -504,7 +518,15 @@ body {
 
 /* Desktop layout */
 @media (min-width: 768px) {
-  .app {
+  .top-nav {
+    display: flex;
+  }
+
+  .top-nav-buttons {
+    display: flex;
+  }
+
+  .app-body {
     flex-direction: row;
   }
 

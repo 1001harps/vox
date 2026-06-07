@@ -69,20 +69,6 @@ export function Sidebar({
 }: SidebarProps) {
   return (
     <aside className="sidebar">
-      <nav className="sidebar-nav">
-        <button
-          className={`sidebar-nav-btn${effectiveView === "practice" ? " sidebar-nav-btn-active" : ""}`}
-          onClick={() => onSetView("practice")}
-        >
-          Practice
-        </button>
-        <button
-          className={`sidebar-nav-btn${effectiveView === "progress" ? " sidebar-nav-btn-active" : ""}`}
-          onClick={() => onSetView("progress")}
-        >
-          Progress
-        </button>
-      </nav>
       <div className="sidebar-recordings">
         <div className="sidebar-recordings-header">Recordings</div>
         <div className="sidebar-recordings-list">
