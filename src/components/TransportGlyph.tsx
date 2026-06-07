@@ -5,8 +5,7 @@ export function TransportGlyph({ type }: {
     case "record":
       return (
         <svg viewBox="0 0 24 24" fill="none">
-          <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="1.5" />
-          <circle cx="12" cy="12" r="5" fill="#e0392b" />
+          <circle cx="12" cy="12" r="12" fill="#e0392b" />
         </svg>
       );
     case "stop":
