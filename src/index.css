@@ -353,28 +353,30 @@ body {
 }
 
 .recording-row {
-  display: flex;
-  align-items: center;
-  padding: 0 16px;
   border-bottom: 1px solid #eee;
 }
 
-.recording-row-play {
-  flex: 1;
+/* Collapsed row: tap target that toggles the action strip. */
+.recording-row-main {
   display: flex;
   align-items: center;
-  padding: 12px 0;
+  gap: 8px;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 12px 16px;
   border: none;
   background: none;
   cursor: pointer;
   text-align: left;
 }
 
-.recording-row-play:active {
+.recording-row-main:active {
   background: #f2f2f2;
 }
 
 .recording-info {
+  flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -396,34 +398,52 @@ body {
   font-size: 13px;
   color: #888;
   font-variant-numeric: tabular-nums;
-  padding: 0 8px;
 }
 
-.recording-row-download {
+.recording-chevron {
+  flex: 0 0 auto;
+  color: #bbb;
+  transition: transform 0.15s ease;
+}
+
+.recording-row-expanded .recording-chevron {
+  transform: rotate(180deg);
+}
+
+/* Expanded action strip: Play / Download / Delete. */
+.recording-actions {
+  display: flex;
+  gap: 8px;
+  padding: 0 16px 12px;
+}
+
+.recording-action {
+  flex: 1;
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 8px;
-  color: #bbb;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  background: #fff;
+  font-size: 13px;
+  color: #333;
   cursor: pointer;
   text-decoration: none;
 }
 
-.recording-row-download:active {
-  color: #555;
+.recording-action:active {
+  background: #f2f2f2;
 }
 
-.recording-row-delete {
-  padding: 8px 12px;
-  border: none;
-  background: none;
-  font-size: 18px;
-  color: #ddd;
-  cursor: pointer;
+.recording-action-delete {
+  color: #e0392b;
+  border-color: #f0c9c5;
 }
 
-.recording-row-delete:active {
-  color: #f44;
+.recording-action-delete:active {
+  background: #fdecea;
 }
 
 /* Progress view */
