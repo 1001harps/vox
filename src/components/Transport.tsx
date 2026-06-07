@@ -1,4 +1,4 @@
-import type { RefObject } from "react";
+import { useState, type RefObject } from "react";
 import type { Recording } from "../types";
 import { formatDuration } from "../utils/format";
 import { TransportGlyph } from "./TransportGlyph";
@@ -10,7 +10,6 @@ interface TransportProps {
   transportState: TransportState;
   elapsedMs: number;
   playbackMs: number;
-  totalMs: number;
   waveformPeaks: Float32Array | null;
   playheadRef: RefObject<number>;
   liveWaveformRef: RefObject<LiveWaveformHandle | null>;
@@ -29,7 +28,6 @@ export function Transport({
   transportState,
   elapsedMs,
   playbackMs,
-  totalMs,
   waveformPeaks,
   playheadRef,
   liveWaveformRef,
@@ -43,12 +41,31 @@ export function Transport({
   onPausePlayback,
   onResumePlayback,
 }: TransportProps) {
+  // Position being scrubbed (0–1) while dragging the waveform, or null when
+  // not scrubbing. Drives the timestamp preview, which then settles back to
+  // the live playback time on release.
+  const [scrubProgress, setScrubProgress] = useState<number | null>(null);
+
+  // Idle: nothing to scrub or show, so collapse the whole bar to a single
+  // floating record button and let the pitch graph fill the freed space.
+  if (transportState === "idle") {
+    return (
+      <div className="transport-idle">
+        <button
+          className="transport-btn transport-fab"
+          onClick={onStartRecording}
+          aria-label="Record"
+        >
+          <TransportGlyph type="record" />
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div className="transport">
       <div className="transport-waveform">
-        {transportState === "idle"
-          ? <div className="wf-flat" />
-          : transportState === "recording"
+        {transportState === "recording"
           ? <LiveWaveform ref={liveWaveformRef} />
           : (
             <>
@@ -57,6 +74,8 @@ export function Transport({
                 peaks={waveformPeaks}
                 playheadRef={playheadRef}
                 onSeek={onSeek}
+                onScrub={setScrubProgress}
+                seekDuringDrag={transportState === "playing" || transportState === "paused"}
               />
               <button
                 className="transport-close-btn"
@@ -80,29 +99,9 @@ export function Transport({
       </div>
 
       <div className="transport-row">
-        <span className="transport-time">
-          {transportState === "recording"
-            ? (
-              <span className="rec-meta">
-                <span className="rec-blink" />
-                {formatDuration(elapsedMs)}
-              </span>
-            )
-            : transportState === "playing" || transportState === "paused"
-            ? formatDuration(playbackMs)
-            : "0:00"}
-        </span>
-
-        <div className="transport-center">
-          {transportState === "idle" && (
-            <button
-              className="transport-btn"
-              onClick={onStartRecording}
-              aria-label="Record"
-            >
-              <TransportGlyph type="record" />
-            </button>
-          )}
+        <div className="transport-controls">
+          <div className="transport-side" />
+          <div className="transport-center">
           {transportState === "recording" && (
             <button
               className="transport-btn"
@@ -142,35 +141,27 @@ export function Transport({
           )}
         </div>
 
-        <span className="transport-time right">
-          {transportState === "idle"
-            ? "0:00"
-            : transportState === "recording"
-            ? ""
-            : formatDuration(totalMs)}
-        </span>
+          {/* Empty right spacer, balancing .transport-side to keep the
+              transport button centered. */}
+          <div className="transport-actions" />
+        </div>
 
-        {(transportState === "loaded" || transportState === "playing" || transportState === "paused") && selectedRecording && (
-          <a
-            className="transport-download-btn"
-            href={selectedRecording.url}
-            download={`vox-${selectedRecording.createdAt}.webm`}
-            aria-label="Download recording"
-          >
-            <svg
-              viewBox="0 0 20 20"
-              width="18"
-              height="18"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <path d="M10 3v10M6 9l4 4 4-4M4 15h12" />
-            </svg>
-          </a>
-        )}
+        <span
+          className={`transport-time${transportState === "recording" ? " transport-time-recording" : ""}`}
+        >
+          {transportState === "recording"
+            ? (
+              <span className="rec-meta">
+                <span className="rec-blink" />
+                {formatDuration(elapsedMs)}
+              </span>
+            )
+            : scrubProgress !== null && selectedRecording
+            ? formatDuration(scrubProgress * selectedRecording.durationMs)
+            : transportState === "playing" || transportState === "paused"
+            ? formatDuration(playbackMs)
+            : "0:00"}
+        </span>
       </div>
     </div>
   );

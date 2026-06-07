@@ -94,13 +94,20 @@ interface PlaybackWaveformProps {
   peaks: Float32Array | null;
   playheadRef: React.RefObject<number>;
   onSeek: (progress: number) => void;
+  // Reports the scrubbed position during a drag (and null on release) so the
+  // transport can preview the time at the finger/cursor.
+  onScrub?: (progress: number | null) => void;
+  // When there's live audio (playing/paused) we seek continuously during the
+  // drag; otherwise (a finished take) we only move the visual playhead and
+  // commit the seek on release, so playback isn't torn down on every move.
+  seekDuringDrag?: boolean;
 }
 
 export const PlaybackWaveform = forwardRef<PlaybackWaveformHandle, PlaybackWaveformProps>(
-  function PlaybackWaveform({ peaks, playheadRef, onSeek }, ref) {
+  function PlaybackWaveform({ peaks, playheadRef, onSeek, onScrub, seekDuringDrag = false }, ref) {
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
     const isDraggingRef = useRef(false);
-    const hasDraggedRef = useRef(false);
+    const lastProgressRef = useRef(0);
 
     const sizeCanvas = useCallback(() => {
       const canvas = canvasRef.current;
@@ -171,37 +178,44 @@ export const PlaybackWaveform = forwardRef<PlaybackWaveformHandle, PlaybackWavef
       return Math.max(0, Math.min(1, x / rect.width));
     }
 
+    // Preview a scrub position: always report the time and move the visual
+    // playhead. With live audio we seek immediately; otherwise we just paint
+    // the playhead and defer the actual seek to release.
+    function preview(progress: number) {
+      lastProgressRef.current = progress;
+      onScrub?.(progress);
+      if (seekDuringDrag) {
+        onSeek(progress);
+      } else {
+        playheadRef.current = progress;
+        renderWaveform();
+      }
+    }
+
     function handlePointerDown(e: React.MouseEvent | React.TouchEvent) {
       isDraggingRef.current = true;
-      hasDraggedRef.current = false;
       const clientX = "touches" in e ? e.touches[0].clientX : e.clientX;
-      onSeek(getProgress(clientX));
+      preview(getProgress(clientX));
     }
 
     function handlePointerMove(e: React.MouseEvent | React.TouchEvent) {
       if (!isDraggingRef.current) return;
-      hasDraggedRef.current = true;
       const clientX = "touches" in e ? e.touches[0].clientX : e.clientX;
-      onSeek(getProgress(clientX));
+      preview(getProgress(clientX));
     }
 
     function handlePointerUp() {
+      if (!isDraggingRef.current) return;
       isDraggingRef.current = false;
-    }
-
-    function handleClick(e: React.MouseEvent) {
-      if (hasDraggedRef.current) {
-        e.preventDefault();
-        hasDraggedRef.current = false;
-        return;
-      }
-      onSeek(getProgress(e.clientX));
+      // Commit the deferred seek for a finished take (live audio was already
+      // tracking during the drag).
+      if (!seekDuringDrag) onSeek(lastProgressRef.current);
+      onScrub?.(null);
     }
 
     return (
       <button
         className="transport-waveform-btn"
-        onClick={handleClick}
         onMouseDown={handlePointerDown}
         onMouseMove={handlePointerMove}
         onMouseUp={handlePointerUp}

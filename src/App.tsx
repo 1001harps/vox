@@ -167,7 +167,6 @@ function App() {
       : selectedRecording
       ? "loaded"
       : "idle";
-  const totalMs = selectedRecording?.durationMs ?? 0;
 
   // On desktop the Recordings archive is the sidebar, so the full-page
   // "recordings" view collapses into "practice" for rendering purposes.
@@ -224,7 +223,6 @@ function App() {
               transportState={transportState}
               elapsedMs={elapsedMs}
               playbackMs={playbackMs}
-              totalMs={totalMs}
               waveformPeaks={waveformPeaks}
               playheadRef={engine.getPlayheadRef()}
               liveWaveformRef={liveWaveformRef}
@@ -265,7 +263,6 @@ function App() {
                 transportState={transportState}
                 elapsedMs={elapsedMs}
                 playbackMs={playbackMs}
-                totalMs={totalMs}
                 waveformPeaks={waveformPeaks}
                 playheadRef={engine.getPlayheadRef()}
                 liveWaveformRef={liveWaveformRef}

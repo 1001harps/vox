@@ -299,6 +299,9 @@ export class AudioEngine {
       this.audioElement.currentTime = progress * this.audioElement.duration;
       this.playheadRef.current = progress;
       this.callbacks.onPlaybackWaveformRender();
+      // Keep the displayed time in sync — while paused there's no interval
+      // running to update it after the scrub settles.
+      this.callbacks.onPlaybackMsChange(this.audioElement.currentTime * 1000);
     }
   }
 

@@ -46,6 +46,25 @@ function RecordingsList({
             <span className="recording-duration">
               {formatDuration(rec.durationMs)}
             </span>
+            <a
+              className="recording-row-download"
+              href={rec.url}
+              download={`vox-${rec.createdAt}.webm`}
+              aria-label="Download recording"
+            >
+              <svg
+                viewBox="0 0 20 20"
+                width="18"
+                height="18"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M10 3v10M6 9l4 4 4-4M4 15h12" />
+              </svg>
+            </a>
             <button
               className="recording-row-delete"
               onClick={() => onDeleteRecording(rec)}

@@ -66,6 +66,8 @@ body {
   display: flex;
   flex-direction: column;
   height: 100%;
+  /* Positioning context for the idle floating record button. */
+  position: relative;
 }
 
 .stats-card {
@@ -133,6 +135,23 @@ body {
   box-sizing: border-box;
 }
 
+/* Idle: just a floating record button over the bottom of the pitch graph. */
+.transport-idle {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 20px;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.transport-fab {
+  pointer-events: auto;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+}
+
 .transport-waveform {
   height: 44px;
   position: relative;
@@ -182,33 +201,47 @@ body {
   height: 100%;
 }
 
-/* Idle / recording: flat dashed baseline where the waveform will be. */
-.wf-flat {
-  height: 0;
-  margin-top: 21px;
-  border-top: 2px dashed #d4d4d4;
-}
-
 .transport-row {
   display: flex;
+  flex-direction: column;
   align-items: center;
-  justify-content: space-between;
+  gap: 8px;
+}
+
+/* The button row: a centered transport button flanked by equal-weight sides. */
+.transport-controls {
+  display: flex;
+  align-items: center;
+  width: 100%;
   gap: 12px;
 }
 
-.transport-time {
+/* Empty left spacer; balances .transport-actions so the button stays centered. */
+.transport-side {
   flex: 1 1 0;
+}
+
+.transport-center {
+  flex: 0 0 auto;
+}
+
+/* Holds the download button (right side); balances .transport-side. */
+.transport-actions {
+  flex: 1 1 0;
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* Single timestamp, centered beneath the transport button. */
+.transport-time {
   font-size: 13px;
   color: #888;
   font-variant-numeric: tabular-nums;
 }
 
-.transport-time.right {
-  text-align: right;
-}
-
-.transport-center {
-  flex: 0 0 auto;
+/* Elapsed time while recording, tinted to match the record indicator. */
+.transport-time-recording {
+  color: #e0392b;
 }
 
 .transport-btn {
@@ -238,29 +271,6 @@ body {
 .transport-btn svg {
   width: 100%;
   height: 100%;
-}
-
-.transport-download-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 6px;
-  border: none;
-  border-radius: 50%;
-  background: none;
-  cursor: pointer;
-  color: #888;
-  text-decoration: none;
-  flex: 0 0 auto;
-}
-
-.transport-download-btn:active {
-  background: #f2f2f2;
-}
-
-.transport-download-btn svg {
-  width: 18px;
-  height: 18px;
 }
 
 .rec-meta {
@@ -387,6 +397,20 @@ body {
   color: #888;
   font-variant-numeric: tabular-nums;
   padding: 0 8px;
+}
+
+.recording-row-download {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px;
+  color: #bbb;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.recording-row-download:active {
+  color: #555;
 }
 
 .recording-row-delete {
@@ -549,6 +573,15 @@ body {
   .sidebar .transport {
     border-top: 1px solid #eee;
     padding: 16px;
+  }
+
+  /* In the sidebar the idle button sits in the footer in flow rather than
+     floating over the recordings list. */
+  .sidebar .transport-idle {
+    position: static;
+    padding: 16px;
+    border-top: 1px solid #eee;
+    pointer-events: auto;
   }
 
   .tab-bar {
