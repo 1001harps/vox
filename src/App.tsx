@@ -216,7 +216,29 @@ function App() {
           onSetView={setView}
           onPlayRecording={playRecording}
           onDeleteRecording={deleteRecording}
-        />
+        >
+          {isDesktop && (
+            <Transport
+              transportState={transportState}
+              armed={armed}
+              elapsedMs={elapsedMs}
+              playbackMs={playbackMs}
+              totalMs={totalMs}
+              waveformPeaks={waveformPeaks}
+              playheadRef={engine.getPlayheadRef()}
+              liveWaveformRef={liveWaveformRef}
+              playbackWaveformRef={playbackWaveformRef}
+              selectedRecording={selectedRecording}
+              onSeek={handleWaveformSeek}
+              onClose={closeRecording}
+              onStartRecording={startRecording}
+              onStopRecording={stopRecording}
+              onPlayRecording={playRecording}
+              onPausePlayback={pausePlayback}
+              onResumePlayback={resumePlayback}
+            />
+          )}
+        </Sidebar>
         <div className="main-pane">
           <div className="content">
           {
@@ -237,25 +259,27 @@ function App() {
               )}
             </PitchGraph>
 
-            <Transport
-              transportState={transportState}
-              armed={armed}
-              elapsedMs={elapsedMs}
-              playbackMs={playbackMs}
-              totalMs={totalMs}
-              waveformPeaks={waveformPeaks}
-              playheadRef={engine.getPlayheadRef()}
-              liveWaveformRef={liveWaveformRef}
-              playbackWaveformRef={playbackWaveformRef}
-              selectedRecording={selectedRecording}
-              onSeek={handleWaveformSeek}
-              onClose={closeRecording}
-              onStartRecording={startRecording}
-              onStopRecording={stopRecording}
-              onPlayRecording={playRecording}
-              onPausePlayback={pausePlayback}
-              onResumePlayback={resumePlayback}
-            />
+            {!isDesktop && (
+              <Transport
+                transportState={transportState}
+                armed={armed}
+                elapsedMs={elapsedMs}
+                playbackMs={playbackMs}
+                totalMs={totalMs}
+                waveformPeaks={waveformPeaks}
+                playheadRef={engine.getPlayheadRef()}
+                liveWaveformRef={liveWaveformRef}
+                playbackWaveformRef={playbackWaveformRef}
+                selectedRecording={selectedRecording}
+                onSeek={handleWaveformSeek}
+                onClose={closeRecording}
+                onStartRecording={startRecording}
+                onStopRecording={stopRecording}
+                onPlayRecording={playRecording}
+                onPausePlayback={pausePlayback}
+                onResumePlayback={resumePlayback}
+              />
+            )}
           </div>
 
           {effectiveView === "recordings" && (

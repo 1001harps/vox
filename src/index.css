@@ -546,6 +546,11 @@ body {
     height: 100%;
   }
 
+  .sidebar .transport {
+    border-top: 1px solid #eee;
+    padding: 16px;
+  }
+
   .tab-bar {
     display: none;
   }

@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import type { Recording, View } from "../types";
 import { formatDateLabel, formatDuration, formatTime } from "../utils/format";
 
@@ -8,6 +9,7 @@ interface SidebarProps {
   onSetView: (view: View) => void;
   onPlayRecording: (rec: Recording) => void;
   onDeleteRecording: (rec: Recording) => void;
+  children?: ReactNode;
 }
 
 function RecordingsList({
@@ -66,6 +68,7 @@ export function Sidebar({
   onSetView,
   onPlayRecording,
   onDeleteRecording,
+  children,
 }: SidebarProps) {
   return (
     <aside className="sidebar">
@@ -80,6 +83,7 @@ export function Sidebar({
           />
         </div>
       </div>
+      {children}
     </aside>
   );
 }
