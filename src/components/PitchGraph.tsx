@@ -75,8 +75,8 @@ export const PitchGraph = forwardRef<PitchGraphHandle, PitchGraphProps>(
       ctx.strokeStyle = "#ddd";
       ctx.lineWidth = 1;
       ctx.beginPath();
-      ctx.moveTo(width / 2, 0);
-      ctx.lineTo(width / 2, height);
+      ctx.moveTo(width * 0.75, 0);
+      ctx.lineTo(width * 0.75, height);
       ctx.stroke();
     }, []);
 
@@ -102,7 +102,7 @@ export const PitchGraph = forwardRef<PitchGraphHandle, PitchGraphProps>(
       const laneH = height / LANES;
       const midiToY = (midi: number) => (MAX_MIDI - midi + 0.5) * laneH;
       const now = performance.now();
-      const timeToX = (t: number) => (width / 2) * (1 - (now - t) / WINDOW_MS);
+      const timeToX = (t: number) => width * 0.75 * (1 - (now - t) / WINDOW_MS);
 
       const grid = gridCanvasRef.current;
       if (grid && grid.width > 0 && grid.height > 0) {
