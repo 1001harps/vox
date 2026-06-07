@@ -7,7 +7,6 @@ import type { LiveWaveformHandle, PlaybackWaveformHandle } from "../components/W
 
 interface UseAudioEngineOptions {
   storage: RecordingStorage;
-  pitchDisplayRef: React.RefObject<HTMLSpanElement | null>;
   pitchGraphRef: React.RefObject<PitchGraphHandle | null>;
   liveWaveformRef: React.RefObject<LiveWaveformHandle | null>;
   playbackWaveformRef: React.RefObject<PlaybackWaveformHandle | null>;
@@ -20,7 +19,6 @@ interface UseAudioEngineOptions {
 
 export function useAudioEngine({
   storage,
-  pitchDisplayRef,
   pitchGraphRef,
   liveWaveformRef,
   playbackWaveformRef,
@@ -39,20 +37,8 @@ export function useAudioEngine({
       onElapsedMsChange,
       onPlaybackMsChange,
       onRecordingCreated,
-      onPitchUpdate: (noteName, inTune) => {
-        const pitchEl = pitchDisplayRef.current;
-        if (pitchEl) {
-          pitchEl.textContent = noteName;
-          pitchEl.style.color = inTune ? "#2e9e4f" : "#111";
-        }
-      },
-      onPitchClear: () => {
-        const pitchEl = pitchDisplayRef.current;
-        if (pitchEl) {
-          pitchEl.textContent = "\u2014";
-          pitchEl.style.color = "#111";
-        }
-      },
+      onPitchUpdate: () => {},
+      onPitchClear: () => {},
       onRenderGraph: () => pitchGraphRef.current?.render(),
       onLiveWaveformFrame: (peak) => liveWaveformRef.current?.drawFrame(peak),
       onPlaybackWaveformRender: () => playbackWaveformRef.current?.render(),

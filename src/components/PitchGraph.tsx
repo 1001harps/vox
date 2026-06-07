@@ -114,6 +114,16 @@ export const PitchGraph = forwardRef<PitchGraphHandle, PitchGraphProps>(
 
       const history = historyRef.current;
       if (!history) return;
+
+      const lastIdx = history.samples.length - 1;
+      const last = lastIdx >= history.start ? history.samples[lastIdx] : undefined;
+      if (last && !Number.isNaN(last.midi)) {
+        const midi = Math.min(MAX_MIDI, Math.max(MIN_MIDI, Math.round(last.midi)));
+        const rowTop = (MAX_MIDI - midi) * laneH;
+        ctx.fillStyle = "rgba(46, 158, 79, 0.12)";
+        ctx.fillRect(0, rowTop, width, laneH);
+      }
+
       ctx.strokeStyle = "#333";
       ctx.lineWidth = 2;
       ctx.lineJoin = "round";
@@ -133,8 +143,6 @@ export const PitchGraph = forwardRef<PitchGraphHandle, PitchGraphProps>(
       }
       ctx.stroke();
 
-      const lastIdx = history.samples.length - 1;
-      const last = lastIdx >= history.start ? history.samples[lastIdx] : undefined;
       if (last && !Number.isNaN(last.midi)) {
         const freq = 440 * Math.pow(2, (last.midi - 69) / 12);
         const inTune = Math.abs(noteFromPitch(freq).cents) <= 5;

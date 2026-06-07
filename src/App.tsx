@@ -13,7 +13,6 @@ import { Transport } from "./components/Transport";
 import { ProgressBar } from "./components/ProgressBar";
 import { Sidebar, RecordingsList } from "./components/Sidebar";
 import { TabBar } from "./components/TabBar";
-import { StatsCard } from "./components/StatsCard";
 import { useDesktopMediaQuery } from "./hooks/useDesktopMediaQuery";
 import { useAudioEngine } from "./hooks/useAudioEngine";
 
@@ -33,7 +32,6 @@ function App() {
 
   const isDesktop = useDesktopMediaQuery();
 
-  const pitchDisplayRef = useRef<HTMLSpanElement | null>(null);
   const peaksRef = useRef<Float32Array | null>(null);
 
   // Component handles for imperative canvas rendering
@@ -43,7 +41,6 @@ function App() {
 
   const engine = useAudioEngine({
     storage,
-    pitchDisplayRef,
     pitchGraphRef,
     liveWaveformRef,
     playbackWaveformRef,
@@ -189,8 +186,6 @@ function App() {
             className="practice-view"
             style={{ display: effectiveView === "practice" ? undefined : "none" }}
           >
-            <StatsCard ref={pitchDisplayRef} elapsedMs={elapsedMs} />
-
             <PitchGraph ref={pitchGraphRef} historyRef={engine.getHistoryRef()} engine={engine}>
               {status === "idle" && !selectedRecording && (
                 <button className="graph-overlay" onClick={startMonitor}>

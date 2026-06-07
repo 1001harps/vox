@@ -53,12 +53,6 @@ body {
   margin-top: 4px;
 }
 
-.stats-divider {
-  width: 1px;
-  height: 40px;
-  background: #ddd;
-}
-
 .pitch-graph-container {
   flex: 1;
   min-height: 0;
