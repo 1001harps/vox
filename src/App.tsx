@@ -64,7 +64,14 @@ function App() {
   }
 
   function handleWaveformSeek(progress: number) {
-    engine.seekTo(progress);
+    // Once a take finishes, the audio element is torn down and the transport
+    // sits in "loaded" — a plain seek would be a no-op, so restart playback
+    // from the clicked position instead.
+    if (transportState === "loaded" && selectedRecording) {
+      engine.startPlayback(selectedRecording.url, selectedRecording, false, progress);
+    } else {
+      engine.seekTo(progress);
+    }
   }
 
   async function loadRecordings() {

@@ -131,7 +131,7 @@ export class AudioEngine {
     this.callbacks.onStatusChange("monitoring");
   }
 
-  async startPlayback(url: string, _selectedRecording: Recording, isPaused: boolean): Promise<void> {
+  async startPlayback(url: string, _selectedRecording: Recording, isPaused: boolean, startProgress = 0): Promise<void> {
     this.teardown();
 
     const audio = new Audio(url);
@@ -148,6 +148,19 @@ export class AudioEngine {
     analyser.connect(audioContext.destination);
 
     audio.onended = () => this.endPlayback();
+
+    // Start from a scrubbed position (e.g. clicking the waveform after a take
+    // has finished, when the previous audio element has been torn down). Wait
+    // for metadata so the duration is known before mapping progress to time.
+    if (startProgress > 0) {
+      if (!audio.duration || Number.isNaN(audio.duration)) {
+        await new Promise<void>((resolve) => {
+          audio.addEventListener("loadedmetadata", () => resolve(), { once: true });
+        });
+      }
+      audio.currentTime = startProgress * audio.duration;
+      this.playheadRef.current = startProgress;
+    }
 
     const updatePlayhead = () => {
       if (audio.duration) {
