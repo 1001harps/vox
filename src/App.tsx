@@ -160,9 +160,6 @@ function App() {
       : selectedRecording
       ? "loaded"
       : "idle";
-  // Mic is open and ready to record (vs. cold idle, where the graph overlay
-  // is the arm gesture and Record is disabled).
-  const armed = status === "monitoring";
   const totalMs = selectedRecording?.durationMs ?? 0;
 
   // On desktop the Recordings archive is the sidebar, so the full-page
@@ -210,17 +207,14 @@ function App() {
       </div>
       <div className="app-body">
         <Sidebar
-          effectiveView={effectiveView}
           recordings={recordings}
           selectedRecording={selectedRecording}
-          onSetView={setView}
           onPlayRecording={playRecording}
           onDeleteRecording={deleteRecording}
         >
           {isDesktop && (
             <Transport
               transportState={transportState}
-              armed={armed}
               elapsedMs={elapsedMs}
               playbackMs={playbackMs}
               totalMs={totalMs}
@@ -262,7 +256,6 @@ function App() {
             {!isDesktop && (
               <Transport
                 transportState={transportState}
-                armed={armed}
                 elapsedMs={elapsedMs}
                 playbackMs={playbackMs}
                 totalMs={totalMs}

@@ -1,12 +1,10 @@
 import type { ReactNode } from "react";
-import type { Recording, View } from "../types";
+import type { Recording } from "../types";
 import { formatDateLabel, formatDuration, formatTime } from "../utils/format";
 
 interface SidebarProps {
-  effectiveView: View;
   recordings: Recording[];
   selectedRecording: Recording | null;
-  onSetView: (view: View) => void;
   onPlayRecording: (rec: Recording) => void;
   onDeleteRecording: (rec: Recording) => void;
   children?: ReactNode;
@@ -17,7 +15,7 @@ function RecordingsList({
   selectedRecording,
   onPlayRecording,
   onDeleteRecording,
-}: Omit<SidebarProps, "effectiveView" | "onSetView">) {
+}: SidebarProps) {
   if (recordings.length === 0) {
     return (
       <div className="list-empty">
@@ -62,10 +60,8 @@ function RecordingsList({
 }
 
 export function Sidebar({
-  effectiveView,
   recordings,
   selectedRecording,
-  onSetView,
   onPlayRecording,
   onDeleteRecording,
   children,

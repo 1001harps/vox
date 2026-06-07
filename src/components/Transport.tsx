@@ -8,7 +8,6 @@ export type TransportState = "idle" | "recording" | "loaded" | "playing" | "paus
 
 interface TransportProps {
   transportState: TransportState;
-  armed: boolean;
   elapsedMs: number;
   playbackMs: number;
   totalMs: number;
@@ -28,7 +27,6 @@ interface TransportProps {
 
 export function Transport({
   transportState,
-  armed,
   elapsedMs,
   playbackMs,
   totalMs,
