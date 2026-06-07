@@ -97,8 +97,8 @@ export function noteFromPitch(freq: number): { name: string; cents: number } {
   return { name: `${name}${octave}`, cents };
 }
 
-// Piano-roll vertical range: E2 (guitar low E) up to C6.
-export const MIN_MIDI = 40;
+// Piano-roll vertical range: C2 up to C6.
+export const MIN_MIDI = 36;
 export const MAX_MIDI = 84;
 export const LANES = MAX_MIDI - MIN_MIDI + 1;
 
