@@ -90,6 +90,9 @@ function App() {
   }
 
   async function startRecording() {
+    if (status === "idle") {
+      await engine.startMonitor();
+    }
     await engine.startRecording();
   }
 

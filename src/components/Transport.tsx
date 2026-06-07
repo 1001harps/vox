@@ -100,7 +100,6 @@ export function Transport({
             <button
               className="transport-btn"
               onClick={onStartRecording}
-              disabled={!armed}
               aria-label="Record"
             >
               <TransportGlyph type="record" />
