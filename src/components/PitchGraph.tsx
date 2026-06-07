@@ -8,6 +8,7 @@ import {
   noteFromPitch,
   WINDOW_MS,
 } from "../audio/pitch";
+import type { AudioEngine } from "../audio/engine";
 import type { HistoryBuffer } from "../types";
 
 export interface PitchGraphHandle {
@@ -16,14 +17,17 @@ export interface PitchGraphHandle {
 
 interface PitchGraphProps {
   historyRef: React.RefObject<HistoryBuffer>;
+  engine: AudioEngine;
   children?: ReactNode;
 }
 
 export const PitchGraph = forwardRef<PitchGraphHandle, PitchGraphProps>(
-  function PitchGraph({ historyRef, children }, ref) {
+  function PitchGraph({ historyRef, engine, children }, ref) {
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
     const containerRef = useRef<HTMLDivElement | null>(null);
     const gridCanvasRef = useRef<HTMLCanvasElement | null>(null);
+    const holdingRef = useRef(false);
+    const holdingMidiRef = useRef<number | null>(null);
 
     const drawGridToCache = useCallback((width: number, height: number) => {
       if (width <= 0 || height <= 0) return;
@@ -159,9 +163,52 @@ export const PitchGraph = forwardRef<PitchGraphHandle, PitchGraphProps>(
       return () => ro.disconnect();
     }, [sizeCanvas, renderGraph]);
 
+    const yToMidi = useCallback((clientY: number): number | null => {
+      const canvas = canvasRef.current;
+      if (!canvas) return null;
+      const rect = canvas.getBoundingClientRect();
+      const y = clientY - rect.top;
+      const laneH = rect.height / LANES;
+      const row = Math.floor(y / laneH);
+      const midi = MAX_MIDI - row;
+      if (midi < MIN_MIDI || midi > MAX_MIDI) return null;
+      return midi;
+    }, []);
+
+    const handlePointerDown = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
+      const midi = yToMidi(e.clientY);
+      if (midi === null) return;
+      holdingRef.current = true;
+      holdingMidiRef.current = midi;
+      (e.target as HTMLCanvasElement).setPointerCapture(e.pointerId);
+      engine.playTone(midi);
+    }, [engine, yToMidi]);
+
+    const handlePointerMove = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
+      if (!holdingRef.current) return;
+      const midi = yToMidi(e.clientY);
+      if (midi === null || midi === holdingMidiRef.current) return;
+      holdingMidiRef.current = midi;
+      engine.playTone(midi);
+    }, [engine, yToMidi]);
+
+    const handlePointerUp = useCallback(() => {
+      if (!holdingRef.current) return;
+      holdingRef.current = false;
+      holdingMidiRef.current = null;
+      engine.stopTone();
+    }, [engine]);
+
     return (
       <div className="pitch-graph-container" ref={containerRef}>
-        <canvas ref={canvasRef} />
+        <canvas
+          ref={canvasRef}
+          style={{ touchAction: "none" }}
+          onPointerDown={handlePointerDown}
+          onPointerMove={handlePointerMove}
+          onPointerUp={handlePointerUp}
+          onPointerCancel={handlePointerUp}
+        />
         {children}
       </div>
     );

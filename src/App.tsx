@@ -199,7 +199,7 @@ function App() {
           >
             <StatsCard ref={pitchDisplayRef} elapsedMs={elapsedMs} />
 
-            <PitchGraph ref={pitchGraphRef} historyRef={engine.getHistoryRef()}>
+            <PitchGraph ref={pitchGraphRef} historyRef={engine.getHistoryRef()} engine={engine}>
               {status === "idle" && !selectedRecording && (
                 <button className="graph-overlay" onClick={startMonitor}>
                   <svg viewBox="0 0 100 100" className="graph-overlay-icon">

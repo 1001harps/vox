@@ -27,6 +27,9 @@ export class AudioEngine {
   private recordStartTime = 0;
   private elapsedInterval: number | null = null;
   private playbackInterval: number | null = null;
+  private toneContext: AudioContext | null = null;
+  private toneOsc: OscillatorNode | null = null;
+  private toneGain: GainNode | null = null;
 
   private historyRef: { current: HistoryBuffer } = { current: { samples: [], start: 0 } };
   private playheadRef: { current: number } = { current: 0 };
@@ -249,6 +252,11 @@ export class AudioEngine {
   }
 
   teardown(): void {
+    this.stopTone();
+    if (this.toneContext) {
+      this.toneContext.close();
+      this.toneContext = null;
+    }
     if (this.stopAnalysis) {
       this.stopAnalysis();
       this.stopAnalysis = null;
@@ -278,6 +286,37 @@ export class AudioEngine {
       this.audioElement.currentTime = progress * this.audioElement.duration;
       this.playheadRef.current = progress;
       this.callbacks.onPlaybackWaveformRender();
+    }
+  }
+
+  async playTone(midi: number): Promise<void> {
+    this.stopTone();
+    if (!this.toneContext) {
+      this.toneContext = new AudioContext();
+    }
+    await this.toneContext.resume();
+    const freq = 440 * Math.pow(2, (midi - 69) / 12);
+    const osc = this.toneContext.createOscillator();
+    osc.type = "sine";
+    osc.frequency.value = freq;
+    const gain = this.toneContext.createGain();
+    gain.gain.value = 0.25;
+    osc.connect(gain);
+    gain.connect(this.toneContext.destination);
+    osc.start();
+    this.toneOsc = osc;
+    this.toneGain = gain;
+  }
+
+  stopTone(): void {
+    if (this.toneOsc) {
+      try { this.toneOsc.stop(); } catch { /* already stopped */ }
+      this.toneOsc.disconnect();
+      this.toneOsc = null;
+    }
+    if (this.toneGain) {
+      this.toneGain.disconnect();
+      this.toneGain = null;
     }
   }
 }
