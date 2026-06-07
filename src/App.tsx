@@ -13,10 +13,14 @@ import { Transport } from "./components/Transport";
 import { ProgressBar } from "./components/ProgressBar";
 import { Sidebar, RecordingsList } from "./components/Sidebar";
 import { TabBar } from "./components/TabBar";
+import { Settings } from "./components/Settings";
 import { useDesktopMediaQuery } from "./hooks/useDesktopMediaQuery";
+import { useAudioInputDevices } from "./hooks/useAudioInputDevices";
 import { useAudioEngine } from "./hooks/useAudioEngine";
 
 const storage: RecordingStorage = new IndexedDBStorage();
+
+const INPUT_DEVICE_KEY = "vox.inputDeviceId";
 
 function App() {
   const [status, setStatus] = useState<Status>("idle");
@@ -31,6 +35,12 @@ function App() {
   const [playbackMs, setPlaybackMs] = useState(0);
 
   const isDesktop = useDesktopMediaQuery();
+
+  const [inputDeviceId, setInputDeviceId] = useState<string | null>(
+    () => localStorage.getItem(INPUT_DEVICE_KEY) || null,
+  );
+  const { devices: inputDevices, refresh: refreshInputDevices } =
+    useAudioInputDevices();
 
   const peaksRef = useRef<Float32Array | null>(null);
 
@@ -53,6 +63,28 @@ function App() {
       selectRecording(recording);
     },
   });
+
+  // Keep the engine's preferred mic in sync (covers the value restored from
+  // localStorage on first mount as well as later changes).
+  useEffect(() => {
+    engine.setInputDeviceId(inputDeviceId);
+  }, [engine, inputDeviceId]);
+
+  async function handleSelectDevice(id: string | null) {
+    setInputDeviceId(id);
+    if (id) localStorage.setItem(INPUT_DEVICE_KEY, id);
+    else localStorage.removeItem(INPUT_DEVICE_KEY);
+    engine.setInputDeviceId(id);
+    // Apply immediately if the live mic is open; otherwise it takes effect the
+    // next time the mic is started.
+    if (status === "monitoring") {
+      try {
+        await engine.restartMic();
+      } catch (err) {
+        console.error("Failed to switch microphone", err);
+      }
+    }
+  }
 
   async function selectRecording(rec: Recording) {
     setSelectedRecording(rec);
@@ -210,6 +242,15 @@ function App() {
             Progress
           </button>
         </nav>
+        {isDesktop && (
+          <Settings
+            variant="desktop"
+            devices={inputDevices}
+            selectedDeviceId={inputDeviceId}
+            onSelectDevice={handleSelectDevice}
+            onOpen={refreshInputDevices}
+          />
+        )}
       </div>
       <div className="app-body">
         <Sidebar
@@ -248,6 +289,15 @@ function App() {
             className="practice-view"
             style={{ display: effectiveView === "practice" ? undefined : "none" }}
           >
+            {!isDesktop && (
+              <Settings
+                variant="mobile"
+                devices={inputDevices}
+                selectedDeviceId={inputDeviceId}
+                onSelectDevice={handleSelectDevice}
+                onOpen={refreshInputDevices}
+              />
+            )}
             <PitchGraph ref={pitchGraphRef} historyRef={engine.getHistoryRef()} engine={engine}>
               {status === "idle" && !selectedRecording && (
                 <button className="graph-overlay" onClick={startMonitor}>

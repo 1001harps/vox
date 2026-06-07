@@ -498,6 +498,101 @@ body {
   text-align: center;
 }
 
+/* Settings */
+.settings-gear {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: none;
+  cursor: pointer;
+  color: #666;
+  padding: 0;
+}
+
+.settings-gear svg {
+  width: 22px;
+  height: 22px;
+}
+
+/* Mobile: a floating gear over the top-right of the pitch graph. */
+.settings-gear-floating {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 3;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.85);
+  color: #555;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.15);
+}
+
+/* Mobile: settings open in a bottom sheet over a dimmed backdrop. */
+.settings-sheet-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  align-items: flex-end;
+  background: rgba(0, 0, 0, 0.35);
+}
+
+.settings-sheet {
+  width: 100%;
+  box-sizing: border-box;
+  background: #fff;
+  border-radius: 16px 16px 0 0;
+  padding: 20px 16px calc(20px + env(safe-area-inset-bottom));
+  box-shadow: 0 -2px 16px rgba(0, 0, 0, 0.15);
+}
+
+.settings-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+.settings-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: #111;
+}
+
+.settings-close {
+  border: none;
+  background: none;
+  font-size: 22px;
+  line-height: 1;
+  color: #888;
+  cursor: pointer;
+  padding: 4px 8px;
+}
+
+.settings-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.settings-field-label {
+  font-size: 13px;
+  color: #888;
+}
+
+.settings-select {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  font-size: 15px;
+  border: 1px solid #ccc;
+  border-radius: 8px;
+  background: #fff;
+  color: #111;
+}
+
 /* Main pane wrapper */
 .main-pane {
   display: flex;
@@ -548,6 +643,30 @@ body {
 
   .top-nav-buttons {
     display: flex;
+  }
+
+  /* Push the settings gear to the far right of the top nav. */
+  .settings-desktop {
+    position: relative;
+    margin-left: auto;
+  }
+
+  .settings-gear:hover {
+    color: #111;
+  }
+
+  .settings-dropdown {
+    position: absolute;
+    top: calc(100% + 8px);
+    right: 0;
+    width: 260px;
+    box-sizing: border-box;
+    background: #fff;
+    border: 1px solid #ddd;
+    border-radius: 12px;
+    padding: 16px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.12);
+    z-index: 20;
   }
 
   .app-body {

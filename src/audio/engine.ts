@@ -31,6 +31,8 @@ export class AudioEngine {
   private toneOsc: OscillatorNode | null = null;
   private toneGain: GainNode | null = null;
 
+  private inputDeviceId: string | null = null;
+
   private historyRef: { current: HistoryBuffer } = { current: { samples: [], start: 0 } };
   private playheadRef: { current: number } = { current: 0 };
 
@@ -50,8 +52,18 @@ export class AudioEngine {
     return this.playheadRef;
   }
 
+  // The preferred microphone. null = let the browser pick the system default.
+  // Applied the next time the mic is opened; call restartMic() to switch live.
+  setInputDeviceId(deviceId: string | null): void {
+    this.inputDeviceId = deviceId;
+  }
+
   async openMic(): Promise<void> {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: this.inputDeviceId
+        ? { deviceId: { exact: this.inputDeviceId } }
+        : true,
+    });
     this.stream = stream;
 
     const audioContext = new AudioContext();
@@ -74,6 +86,20 @@ export class AudioEngine {
   async startMonitor(): Promise<void> {
     await this.openMic();
     this.callbacks.onStatusChange("monitoring");
+  }
+
+  // Tear down the live mic graph and reopen it with the current input device.
+  // Only meaningful while monitoring — the caller gates on status.
+  async restartMic(): Promise<void> {
+    if (this.stopAnalysis) {
+      this.stopAnalysis();
+      this.stopAnalysis = null;
+    }
+    this.stream?.getTracks().forEach((t) => t.stop());
+    this.stream = null;
+    await this.audioContext?.close();
+    this.audioContext = null;
+    await this.openMic();
   }
 
   async startRecording(): Promise<void> {
