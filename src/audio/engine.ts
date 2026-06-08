@@ -148,13 +148,20 @@ export class AudioEngine {
   }
 
   stopRecording(): void {
+    // stop() flushes the final chunk and fires onstop (which creates the take
+    // and selects it). The encoded data is already buffered, so tearing down
+    // the live mic right after is safe.
     this.mediaRecorder?.stop();
     this.mediaRecorder = null;
     if (this.elapsedInterval !== null) {
       clearInterval(this.elapsedInterval);
       this.elapsedInterval = null;
     }
-    this.callbacks.onStatusChange("monitoring");
+    // Release the mic and drop to idle rather than back to live monitoring. The
+    // just-recorded take becomes the selected recording, so the transport lands
+    // in "loaded" — queued for playback, ready to replay, but not auto-playing.
+    this.teardown();
+    this.callbacks.onStatusChange("idle");
   }
 
   async startPlayback(url: string, _selectedRecording: Recording, isPaused: boolean, startProgress = 0): Promise<void> {
