@@ -703,7 +703,7 @@ body {
   .sidebar {
     display: flex;
     flex-direction: column;
-    width: 280px;
+    width: 380px;
     flex-shrink: 0;
     border-right: 1px solid #eee;
     height: 100%;
