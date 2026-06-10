@@ -149,18 +149,30 @@ export class AudioEngine {
 
   stopRecording(): void {
     // stop() flushes the final chunk and fires onstop (which creates the take
-    // and selects it). The encoded data is already buffered, so tearing down
-    // the live mic right after is safe.
+    // and selects it). The encoded data is already buffered, so stopping the
+    // recorder is safe.
     this.mediaRecorder?.stop();
     this.mediaRecorder = null;
     if (this.elapsedInterval !== null) {
       clearInterval(this.elapsedInterval);
       this.elapsedInterval = null;
     }
-    // Release the mic and drop to idle rather than back to live monitoring. The
-    // just-recorded take becomes the selected recording, so the transport lands
-    // in "loaded" — queued for playback, ready to replay, but not auto-playing.
-    this.teardown();
+    // Partial cleanup: close the audio context and analysis but keep the stream
+    // alive. Stopping stream tracks on mobile releases the OS mic grant, causing
+    // a new permission prompt on the next recording. By holding the stream open,
+    // startRecording() can reuse it without re-prompting.
+    this.stopTone();
+    if (this.toneContext) {
+      this.toneContext.close();
+      this.toneContext = null;
+    }
+    if (this.stopAnalysis) {
+      this.stopAnalysis();
+      this.stopAnalysis = null;
+    }
+    this.audioContext?.close();
+    this.audioContext = null;
+    this.callbacks.onPitchClear();
     this.callbacks.onStatusChange("idle");
   }
 
